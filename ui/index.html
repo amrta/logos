@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>LOGOS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --bg-main: #141414;
+            --bg-panel: #1f1f1f;
+            --border-color: #2a2a2a;
+            --text-main: #d1d1d1;
+            --text-sub: #555555;
+            --accent: #06b6d4;
+            --terminal-bg: #000000;
+            --shadow-panel: 10px 0 30px rgba(0,0,0,0.5);
+        }
+
+        .light-mode {
+            --bg-main: #f2ebd9;    
+            --bg-panel: #ede4d0;   
+            --border-color: #c7b897; 
+            --text-main: #2a1f15;   
+            --text-sub: #7a6e5b;    
+            --accent: #922b16;      
+            --terminal-bg: #e5dac1;
+            --shadow-panel: 5px 0 15px rgba(61, 48, 33, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: geometricPrecision;
+        }
+
+        body {
+            font-family: "Times New Roman", "Songti SC", "SimSun", serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-size: 16px; 
+            line-height: 1.5;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        /* 物理深度：面板投影 */
+        #left-panel { box-shadow: var(--shadow-panel); z-index: 40; }
+        #right-panel { box-shadow: var(--shadow-panel); z-index: 40; }
+
+        .recessed {
+            box-shadow: inset 2px 2px 10px rgba(0,0,0,0.2);
+            border: 1px solid var(--border-color);
+        }
+
+        .resizer { width: 8px; cursor: col-resize; z-index: 50; }
+        .resizer:hover { border-left: 2px solid var(--accent); }
+
+        /* 3D 核心：加粗线框 */
+        .sphere-container { perspective: 1000px; width: 240px; height: 240px; }
+        .sphere {
+            position: relative; width: 100%; height: 100%; transform-style: preserve-3d;
+            animation: rotateSphere 20s linear infinite;
+        }
+        .sphere-ring {
+            position: absolute; width: 100%; height: 100%; 
+            border: 1.5px solid var(--accent);
+            opacity: 0.3; border-radius: 50%;
+        }
+        @keyframes rotateSphere { from { transform: rotateY(0deg); } to { transform: rotateY(360deg); } }
+
+        /* 图标按钮样式 */
+        .icon-btn {
+            display: flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; border-radius: 2px;
+            transition: all 0.2s; opacity: 0.4;
+        }
+        .icon-btn:hover { opacity: 1; background: var(--border-color); color: var(--accent); }
+        
+        textarea { resize: none; overflow: hidden; background: transparent; outline: none; }
+
+        .right-tab { padding: 6px 10px; font-size: 11px; cursor: pointer; border-bottom: 2px solid transparent; opacity: 0.6; }
+        .right-tab:hover { opacity: 1; }
+        .right-tab.active { opacity: 1; border-bottom-color: var(--accent); }
+        .center-view-tab { padding: 6px 12px; font-size: 11px; font-bold; cursor: pointer; border-bottom: 2px solid transparent; opacity: 0.6; }
+        .center-view-tab:hover { opacity: 1; }
+        .center-view-tab.active { opacity: 1; border-bottom-color: var(--accent); }
+        .arch-node { border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; background: rgba(0,0,0,0.15); }
+        .arch-node .pct { font-size: 10px; color: var(--accent); font-weight: bold; }
+        .arch-node .pct.short { color: #e8c87e; }
+        .right-panel-compact .space-y-2 > * + * { margin-top: 4px; }
+        .right-panel-compact tr { line-height: 1.2; }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col border-[1px] border-[var(--border-color)]">
+
+    <header class="h-10 border-b border-[var(--border-color)] bg-[var(--bg-panel)] flex items-center px-6 justify-between shrink-0 z-50">
+        <div class="flex items-center gap-4">
+            <span class="font-bold tracking-[0.3em] text-[var(--accent)] text-2xl uppercase">Logos</span>
+        </div>
+        
+        <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 px-4 border-r border-[var(--border-color)] tabular-nums opacity-30 text-[13px] font-bold">
+                <i data-lucide="clock" class="w-3.5 h-3.5"></i>
+                <span id="uptime">00:00:00</span>
+            </div>
+            <div class="flex items-center gap-2 px-4">
+                <div id="system-ready" class="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="系统就绪"></div>
+                <span class="text-xs opacity-60">就绪</span>
+            </div>
+            <div class="flex items-center gap-1 pl-2">
+                <button onclick="toggleTheme()" class="icon-btn" title="切换昼夜模式">
+                    <i data-lucide="sun-moon" class="w-4 h-4"></i>
+                </button>
+                <button onclick="resetLayout()" class="icon-btn" title="重置界面布局">
+                    <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                </button>
+                <div class="w-px h-4 bg-[var(--border-color)] mx-2"></div>
+                <button type="button" onclick="toggleSettings()" class="icon-btn" title="Worker 地址">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+    <div id="settings-panel" class="hidden absolute top-10 right-4 z-[100] border border-[var(--border-color)] bg-[var(--bg-panel)] p-3 rounded shadow-lg text-[13px] w-80">
+        <div class="font-bold mb-2 opacity-80">Worker 地址</div>
+        <input type="text" id="settings-worker-url" value="" class="w-full px-2 py-1.5 bg-[var(--bg-main)] border border-[var(--border-color)] rounded text-[var(--text-main)] mb-2" placeholder="https://..."/>
+        <div class="font-bold mb-2 opacity-80">LOGOS 后端 (可选)</div>
+        <input type="text" id="settings-backend-url" value="" class="w-full px-2 py-1.5 bg-[var(--bg-main)] border border-[var(--border-color)] rounded text-[var(--text-main)] mb-2" placeholder="http://127.0.0.1:3000"/>
+        <div class="flex gap-2">
+            <button type="button" onclick="saveWorkerAndReload()" class="px-3 py-1 bg-[var(--accent)] text-white rounded text-xs font-bold">保存并刷新</button>
+            <button type="button" onclick="toggleSettings()" class="px-3 py-1 border border-[var(--border-color)] rounded text-xs">取消</button>
+        </div>
+    </div>
+
+    <div class="flex-1 flex overflow-hidden min-h-0 w-full" id="main-container">
+        
+        <aside id="left-panel" class="w-[260px] border-r border-[var(--border-color)] bg-[var(--bg-panel)] flex flex-col shrink-0 overflow-hidden">
+            <div class="p-4 border-b border-[var(--border-color)] text-[11px] font-bold uppercase opacity-40 tracking-widest">环境监测</div>
+            <div class="flex-1 p-6 space-y-8 overflow-y-auto">
+                <div class="space-y-4">
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-xs font-bold"><span>内核负载</span><span id="left-kernel-pct" class="text-[var(--accent)]">88%</span></div>
+                        <div class="h-2 bg-black/10 recessed"><div id="left-kernel-bar" class="h-full bg-[var(--accent)] w-[88%] shadow-[0_0_8px_var(--accent)]"></div></div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-xs font-bold"><span>物理索引</span><span id="left-index-mb">142 MB</span></div>
+                        <div class="h-2 bg-black/10 recessed"><div class="h-full bg-[var(--accent)] w-[42%] opacity-60"></div></div>
+                    </div>
+                </div>
+                <div class="pt-6 border-t border-[var(--border-color)] space-y-4 text-[13px]">
+                    <div class="flex justify-between items-center">
+                        <span class="opacity-50 font-bold">安全锁</span>
+                        <span class="text-green-700 font-bold">已锁定</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <div class="resizer" id="left-resizer"></div>
+
+        <main class="flex-1 flex flex-col bg-[var(--bg-main)] min-w-0 overflow-hidden relative">
+            <div class="absolute inset-0 opacity-[0.05] pointer-events-none" style="background-image: radial-gradient(var(--text-main) 1px, transparent 1px); background-size: 25px 25px;"></div>
+
+            <div class="h-[65%] border-b border-[var(--border-color)] relative flex flex-col recessed">
+                <div class="flex border-b border-[var(--border-color)] shrink-0">
+                    <div id="center-tab-view" class="center-view-tab active">分析视口</div>
+                    <div id="center-tab-arch" class="center-view-tab">架构</div>
+                </div>
+                <div id="center-content-view" class="flex-1 relative flex items-center justify-center min-h-0">
+                    <div class="absolute top-2 left-6 text-[11px] opacity-25 font-bold uppercase tracking-widest italic">阶段六 分析视口</div>
+                    <div class="sphere-container">
+                        <div class="sphere" id="3d-sphere"></div>
+                    </div>
+                    <div class="absolute bottom-4 left-0 right-0 px-6">
+                        <div class="border border-[var(--border-color)] rounded-sm bg-[var(--bg-panel)] p-3">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-[11px] font-bold uppercase opacity-60">任务队列</span>
+                                <button type="button" onclick="clearCompletedTasks()" class="text-[11px] opacity-60 hover:opacity-100">清除已完成</button>
+                            </div>
+                            <div id="task-queue" class="space-y-2 max-h-24 overflow-y-auto">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="center-content-arch" class="flex-1 hidden min-h-0 overflow-auto p-4">
+                    <div id="arch-svg-row" class="mb-4 hidden">
+                        <div class="text-xs font-bold uppercase opacity-60 mb-2">整体架构</div>
+                        <img id="arch-svg-overall" alt="LOGOS 架构" class="max-w-full h-auto rounded border border-[var(--border-color)]" style="max-height: 280px;" />
+                        <div class="text-xs font-bold uppercase opacity-60 mt-4 mb-2">尿袋管理器与尿袋层</div>
+                        <img id="arch-svg-pouch" alt="尿袋管理器与层" class="max-w-full h-auto rounded border border-[var(--border-color)]" style="max-height: 320px;" />
+                    </div>
+                    <div class="flex gap-6 h-full min-h-[200px]">
+                        <div class="w-[42%] border border-[var(--border-color)] rounded-lg bg-[var(--bg-panel)] p-3 min-h-0 flex flex-col">
+                            <div class="text-xs font-bold uppercase opacity-60 mb-2">尿袋管理器</div>
+                            <div id="arch-manager-nodes" class="grid grid-cols-2 gap-2 min-h-[120px] flex-1 content-start"></div>
+                        </div>
+                        <div class="flex-1 border border-[var(--border-color)] rounded-lg bg-[var(--bg-panel)] p-3 min-h-0 flex flex-col">
+                            <div class="text-xs font-bold uppercase opacity-60 mb-2">尿袋层</div>
+                            <div id="arch-layer-nodes" class="grid grid-cols-3 gap-2 min-h-[120px] flex-1 content-start"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-1 flex min-h-0 bg-black/[0.02]">
+                <div class="flex-1 border-r border-[var(--border-color)] p-5 flex flex-col recessed">
+                    <div id="logic-stream" class="flex-1 text-[14px] font-serif space-y-1 overflow-hidden" style="color: var(--text-main)">
+                        </div>
+                </div>
+                <div class="w-1/3 p-5 flex flex-col justify-center items-center">
+                    <div id="last-reply-summary" class="border border-[var(--border-color)] border-dashed w-full h-full flex items-center justify-center text-[11px] font-bold p-3 text-center overflow-hidden" style="color: var(--text-sub);">
+                        上一句回复将显示在此
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="resizer" id="right-resizer"></div>
+
+        <aside id="right-panel" class="w-[320px] border-l border-[var(--border-color)] bg-[var(--bg-panel)] flex flex-col shrink-0 overflow-hidden right-panel-compact">
+            <div class="flex border-b border-[var(--border-color)] shrink-0">
+                <div id="tab-dialogue" class="right-tab active">对话</div>
+                <div id="tab-evolution" class="right-tab">演化</div>
+                <div id="tab-diagnostics" class="right-tab">诊断</div>
+            </div>
+            <div id="content-dialogue" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <div class="flex-1 flex flex-col bg-[var(--terminal-bg)] recessed min-h-0 overflow-hidden">
+                    <div id="terminal" class="flex-1 p-3 text-[13px] font-mono overflow-y-auto leading-snug space-y-0.5" style="color: var(--accent); line-height: 1.35;"></div>
+                    <div class="p-3 border-t border-[var(--border-color)] bg-[var(--bg-panel)] shrink-0">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-[11px] font-bold opacity-60">输入模式</span>
+                            <button type="button" id="btn-mode-command" class="dialogue-mode-btn px-2 py-1 text-[11px] font-bold border rounded border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--accent)]">命令</button>
+                            <button type="button" id="btn-mode-natural" class="dialogue-mode-btn px-2 py-1 text-[11px] font-bold border border-[var(--border-color)] rounded opacity-60">自然语言</button>
+                        </div>
+                        <p id="dialogue-mode-hint" class="text-[10px] opacity-50 mb-1">在此输入命令，按 Enter 执行；回复显示在上方对话区与左侧摘要。</p>
+                        <div class="flex items-end gap-2">
+                            <span id="terminal-prompt" class="font-bold text-[var(--accent)] pb-0.5">$</span>
+                            <textarea id="terminal-input" rows="1" class="w-full text-[13px] py-0.5 font-serif font-bold leading-tight" style="color: var(--text-main)" placeholder="输入 status / help / pouches 等命令"></textarea>
+                        </div>
+                        <div class="flex gap-2 mt-2">
+                            <button type="button" onclick="testLongContext()" class="px-2 py-1 text-[11px] font-bold border border-[var(--border-color)] rounded hover:bg-[var(--border-color)] transition-colors">测试16K上下文</button>
+                            <button type="button" onclick="testEnhancement()" class="px-2 py-1 text-[11px] font-bold border border-[var(--border-color)] rounded hover:bg-[var(--border-color)] transition-colors">测试3层增强</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="content-evolution" class="flex-1 flex flex-col min-h-0 overflow-hidden hidden">
+                <div class="p-3 overflow-y-auto min-h-0 flex-1">
+                    <div class="text-[11px] font-bold opacity-40 mb-2 tracking-widest">演化队列</div>
+                    <div id="evolution-queue" class="space-y-1.5 text-xs mb-4"></div>
+                    <div class="text-[11px] font-bold opacity-40 mb-2 tracking-widest">学习日志</div>
+                    <div id="learning-stats" class="text-xs opacity-60 mb-1">0 条模式</div>
+                    <div id="learning-log" class="space-y-1.5 text-xs max-h-40 overflow-y-auto">等待学习…</div>
+                </div>
+            </div>
+            <div id="content-diagnostics" class="flex-1 overflow-y-auto min-h-0 hidden">
+                <div class="p-3">
+                    <div class="font-bold text-xs opacity-40 mb-2 tracking-widest">诊断审计</div>
+                    <table class="w-full text-[13px] font-serif border-separate border-spacing-y-1 tabular-nums">
+                        <tbody id="right-metrics-tbody">
+                            <tr class="h-7"><td>命中率</td><td class="text-right font-bold">—</td></tr>
+                            <tr class="h-7"><td>显式回退</td><td class="text-right font-bold">—</td></tr>
+                            <tr class="h-7"><td>身份漂移</td><td class="text-right font-bold">—</td></tr>
+                            <tr class="h-7"><td>运行时长</td><td class="text-right font-bold">—</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <footer class="h-7 border-t border-[var(--border-color)] bg-[var(--bg-panel)] flex items-center px-6 gap-8 text-[11px] font-bold shrink-0 opacity-40">
+        <span class="tracking-widest uppercase">Logos Kernel v6.0.6</span>
+        <div class="ml-auto flex items-center gap-4">
+            <span>咸阳.秦都 (108.9E / 34.2N)</span>
+            <div class="w-2.5 h-2.5 bg-green-700 rounded-full animate-pulse"></div>
+        </div>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+        let WORKER = localStorage.getItem('logos_worker') || 'https://logos-gateway.amrta.workers.dev';
+
+        const sphere = document.getElementById('3d-sphere');
+        async function updateSphere() {
+            try {
+                const r = await fetch(WORKER + '/status');
+                const status = await r.json();
+                sphere.innerHTML = '';
+                const pouches = status.pouches || [];
+                pouches.forEach((pouch, i) => {
+                    const node = document.createElement('div');
+                    node.className = 'absolute rounded-full border-2 cursor-pointer transition-all';
+                    node.style.width = '32px';
+                    node.style.height = '32px';
+                    if (pouch.status === 'active') {
+                        node.style.borderColor = '#10b981';
+                        node.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+                        node.style.boxShadow = '0 0 20px rgba(16, 185, 129, 0.6)';
+                    } else if (pouch.status === 'processing') {
+                        node.style.borderColor = '#f59e0b';
+                        node.style.backgroundColor = 'rgba(245, 158, 11, 0.1)';
+                        node.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.6)';
+                    } else {
+                        node.style.borderColor = 'var(--accent)';
+                        node.style.backgroundColor = 'rgba(6, 182, 212, 0.05)';
+                        node.style.opacity = '0.5';
+                    }
+                    const angle = (i / pouches.length) * Math.PI * 2;
+                    const elevation = (Math.random() - 0.5) * Math.PI * 0.5;
+                    const radius = 90;
+                    const x = Math.cos(angle) * Math.cos(elevation) * radius + 110;
+                    const y = Math.sin(angle) * Math.cos(elevation) * radius + 110;
+                    node.style.left = `${x}px`;
+                    node.style.top = `${y}px`;
+                    const label = document.createElement('div');
+                    label.className = 'absolute text-[10px] font-bold whitespace-nowrap';
+                    label.style.left = '50%';
+                    label.style.top = '-20px';
+                    label.style.transform = 'translateX(-50%)';
+                    label.style.color = 'var(--accent)';
+                    label.innerText = pouch.name;
+                    node.appendChild(label);
+                    node.title = pouch.name + ' (' + pouch.status + ', load: ' + (pouch.load || 0) + '%)';
+                    node.addEventListener('click', () => {
+                        const terminal = document.getElementById('terminal');
+                        const d = document.createElement('div');
+                        d.innerHTML = '<span class="opacity-70">Pouch: ' + pouch.name + ' | Status: ' + pouch.status + ' | Load: ' + (pouch.load || 0) + '%</span>';
+                        terminal.appendChild(d);
+                        terminal.scrollTop = terminal.scrollHeight;
+                    });
+                    sphere.appendChild(node);
+                });
+                for (let i = 0; i < 12; i++) {
+                    const ring = document.createElement('div');
+                    ring.className = 'sphere-ring';
+                    ring.style.transform = 'rotateY(' + (i * 15) + 'deg) rotateX(' + (i * 10) + 'deg)';
+                    sphere.appendChild(ring);
+                }
+                const speed = 20 / (1 + (status.kernel_load / 100));
+                sphere.style.animation = 'rotateSphere ' + speed + 's linear infinite';
+            } catch (e) { console.error('updateSphere', e); }
+        }
+        updateSphere();
+        setInterval(updateSphere, 5000);
+
+        // JS 物理拖拽
+        const setupResizer = (resizerId, panelId, isLeft) => {
+            const resizer = document.getElementById(resizerId);
+            const panel = document.getElementById(panelId);
+            const container = document.getElementById('main-container');
+            let startX, startWidth;
+
+            resizer.addEventListener('mousedown', (e) => {
+                startX = e.clientX;
+                startWidth = panel.offsetWidth;
+                container.style.userSelect = 'none';
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+
+            function onMouseMove(e) {
+                const delta = isLeft ? e.clientX - startX : startX - e.clientX;
+                const newWidth = startWidth + delta;
+                if (newWidth > 200 && newWidth < 800) panel.style.width = `${newWidth}px`;
+            }
+
+            function onMouseUp() {
+                container.style.userSelect = 'auto';
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            }
+        };
+        setupResizer('left-resizer', 'left-panel', true);
+        setupResizer('right-resizer', 'right-panel', false);
+
+        (function initRightTabs() {
+            const tabs = [{ id: 'tab-dialogue', content: 'content-dialogue' }, { id: 'tab-evolution', content: 'content-evolution' }, { id: 'tab-diagnostics', content: 'content-diagnostics' }];
+            tabs.forEach((t, i) => {
+                document.getElementById(t.id).addEventListener('click', () => {
+                    tabs.forEach((x, j) => {
+                        document.getElementById(x.id).classList.toggle('active', j === i);
+                        document.getElementById(x.content).classList.toggle('hidden', j !== i);
+                    });
+                });
+            });
+        })();
+
+        (function initCenterTabs() {
+            const viewTab = document.getElementById('center-tab-view');
+            const archTab = document.getElementById('center-tab-arch');
+            const viewContent = document.getElementById('center-content-view');
+            const archContent = document.getElementById('center-content-arch');
+            viewTab.addEventListener('click', () => {
+                viewTab.classList.add('active');
+                archTab.classList.remove('active');
+                viewContent.classList.remove('hidden');
+                archContent.classList.add('hidden');
+            });
+            archTab.addEventListener('click', () => {
+                archTab.classList.add('active');
+                viewTab.classList.remove('active');
+                archContent.classList.remove('hidden');
+                viewContent.classList.add('hidden');
+                renderArchNodes();
+                loadArchSvgs();
+            });
+        })();
+        renderArchNodes();
+
+        const ARCH_MANAGER_NODES = [
+            { name: '调度', detail: 'call_pouch', pct: 100, goTo: 'status' },
+            { name: '协调', detail: 'sync_patterns', pct: 100, goTo: '演化' },
+            { name: '净化', detail: '无直接职能', pct: 100, goTo: '尿袋列表' },
+            { name: '数学化', detail: 'clamp/score', pct: 100, goTo: '配置' },
+            { name: '演化链', detail: '记成功/失败', pct: 100, goTo: '演化' },
+            { name: '软隔离', detail: '有熵/无熵', pct: 70, goTo: '尿袋列表' },
+            { name: 'learn_routing', detail: '', pct: 100, goTo: '演化' },
+            { name: 'catalog', detail: 'instantiate', pct: 100, goTo: '安装尿袋 reasoning' }
+        ];
+        const ARCH_LAYER_NODES = [
+            { name: 'Language', detail: 'sync_buffer', pct: 100, goTo: '解释 language' },
+            { name: 'catalog', detail: 'instantiate', pct: 100, goTo: '尿袋列表' },
+            { name: 'Memory', detail: 'sync 存记忆', pct: 100, goTo: '解释 memory' },
+            { name: 'DefectScanner', detail: 'follow_ups', pct: 100, goTo: '自我优化' },
+            { name: 'CapabilityComparer', detail: 'evolution_gaps', pct: 100, goTo: '对标' },
+            { name: 'Reasoning', detail: 'is_fallback', pct: 100, goTo: '解释 reasoning' },
+            { name: 'Creative', detail: 'E1', pct: 100, goTo: '解释 creative' },
+            { name: 'Remote', detail: '云端', pct: 100, goTo: '尿袋列表' },
+            { name: 'Pipeline', detail: '/pipeline', pct: 100, goTo: '流水线 reasoning,creative: 你好' }
+        ];
+        function goToInteraction(cmd) {
+            document.getElementById('tab-dialogue').click();
+            document.getElementById('tab-dialogue').classList.add('active');
+            document.getElementById('content-dialogue').classList.remove('hidden');
+            document.getElementById('content-evolution').classList.add('hidden');
+            document.getElementById('content-diagnostics').classList.add('hidden');
+            const input = document.getElementById('terminal-input');
+            if (input && cmd) {
+                input.value = cmd;
+                input.focus();
+            }
+        }
+        function renderArchNodes() {
+            const mg = document.getElementById('arch-manager-nodes');
+            const ly = document.getElementById('arch-layer-nodes');
+            if (!mg || !ly) return;
+            function nodeHtml(n) {
+                const short = n.pct < 100;
+                const goTo = (n.goTo || '').replace(/"/g, '&quot;');
+                return '<div class="arch-node">' +
+                    '<div class="flex justify-between items-center mb-1"><span class="font-bold text-xs">' + n.name + '</span><span class="pct' + (short ? ' short' : '') + '">' + n.pct + '%</span></div>' +
+                    (n.detail ? '<div class="text-[10px] opacity-60 mb-2">' + n.detail + '</div>' : '') +
+                    '<div class="flex gap-1 flex-wrap">' +
+                    '<button type="button" class="arch-go-btn px-1.5 py-0.5 text-[9px] border border-[var(--border-color)] rounded hover:bg-[var(--border-color)]" data-go="' + goTo + '">直达</button>' +
+                    '</div></div>';
+            }
+            mg.innerHTML = ARCH_MANAGER_NODES.map(nodeHtml).join('');
+            ly.innerHTML = ARCH_LAYER_NODES.map(nodeHtml).join('');
+            document.querySelectorAll('.arch-go-btn').forEach(btn => {
+                btn.addEventListener('click', () => goToInteraction(btn.getAttribute('data-go') || ''));
+            });
+        }
+        function loadArchSvgs() {
+            const backend = (localStorage.getItem('logos_backend') || '').trim();
+            const row = document.getElementById('arch-svg-row');
+            const imgOverall = document.getElementById('arch-svg-overall');
+            const imgPouch = document.getElementById('arch-svg-pouch');
+            if (!row || !imgOverall || !imgPouch) return;
+            if (backend) {
+                imgOverall.src = backend.replace(/\/$/, '') + '/docs/LOGOS_ARCHITECTURE.svg';
+                imgPouch.src = backend.replace(/\/$/, '') + '/docs/POUCH_MANAGER_AND_LAYER.svg';
+                imgOverall.onerror = () => { imgOverall.style.display = 'none'; };
+                imgPouch.onerror = () => { imgPouch.style.display = 'none'; };
+                imgOverall.style.display = '';
+                imgPouch.style.display = '';
+                row.classList.remove('hidden');
+            } else {
+                row.classList.add('hidden');
+            }
+        }
+
+        (function initTerminalWelcome() {
+            const term = document.getElementById('terminal');
+            const w = document.createElement('div');
+            w.className = 'opacity-40 italic';
+            w.innerText = '系统就绪。';
+            term.appendChild(w);
+        })();
+
+        let dialogueMode = 'command';
+        (function initDialogueMode() {
+            const btnCmd = document.getElementById('btn-mode-command');
+            const btnNat = document.getElementById('btn-mode-natural');
+            const input = document.getElementById('terminal-input');
+            const prompt = document.getElementById('terminal-prompt');
+            const hintEl = document.getElementById('dialogue-mode-hint');
+            function setMode(mode) {
+                dialogueMode = mode;
+                if (mode === 'command') {
+                    if (btnCmd) { btnCmd.className = 'dialogue-mode-btn px-2 py-1 text-[11px] font-bold border rounded border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--accent)]'; btnCmd.classList.remove('opacity-60'); }
+                    if (btnNat) { btnNat.className = 'dialogue-mode-btn px-2 py-1 text-[11px] font-bold border border-[var(--border-color)] rounded opacity-60'; }
+                    if (input) input.placeholder = '输入 status / help / pouches 等命令';
+                    if (prompt) prompt.innerText = '$';
+                    if (hintEl) hintEl.innerText = '在此输入命令，按 Enter 执行；回复显示在上方对话区与左侧摘要。';
+                } else {
+                    if (btnNat) { btnNat.className = 'dialogue-mode-btn px-2 py-1 text-[11px] font-bold border rounded border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--accent)]'; btnNat.classList.remove('opacity-60'); }
+                    if (btnCmd) { btnCmd.className = 'dialogue-mode-btn px-2 py-1 text-[11px] font-bold border border-[var(--border-color)] rounded opacity-60'; }
+                    if (input) input.placeholder = '直接输入问题或对话，按 Enter 发送';
+                    if (prompt) prompt.innerText = '»';
+                    if (hintEl) hintEl.innerText = '自然语言会发送到同一对话区，回复显示在上方与左侧「上一句回复」。';
+                }
+            }
+            if (btnCmd) btnCmd.addEventListener('click', () => setMode('command'));
+            if (btnNat) btnNat.addEventListener('click', () => setMode('natural'));
+        })();
+
+        const terminalInput = document.getElementById('terminal-input');
+        terminalInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 250) + 'px';
+        });
+
+        terminalInput.addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter' || e.shiftKey) return;
+            e.preventDefault();
+            const cmd = terminalInput.value.trim();
+            if (!cmd) return;
+            const term = document.getElementById('terminal');
+            const inputLine = document.createElement('div');
+            const promptChar = dialogueMode === 'natural' ? '»' : '$';
+            inputLine.innerHTML = promptChar + ' ' + cmd;
+            term.appendChild(inputLine);
+            terminalInput.value = '';
+            terminalInput.style.height = 'auto';
+            if (cmd.startsWith('task:')) {
+                const desc = cmd.substring(5).trim();
+                await createTask(desc);
+                term.scrollTop = term.scrollHeight;
+                return;
+            }
+            try {
+                const payload = { command: cmd };
+                if (dialogueMode === 'natural') payload.mode = 'natural';
+                const backendUrl = localStorage.getItem('logos_backend');
+                if (backendUrl) payload.backend = backendUrl;
+                const response = await fetch(WORKER + '/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const outputLine = document.createElement('div');
+                outputLine.className = 'opacity-70';
+                if (result.error) {
+                    outputLine.innerText = result.error + (result.hint ? '\n' + result.hint : '');
+                } else if (result.reply) {
+                    outputLine.innerText = result.reply;
+                    const summaryEl = document.getElementById('last-reply-summary');
+                    if (summaryEl) summaryEl.innerText = (result.reply.length > 80 ? result.reply.slice(0, 80) + '…' : result.reply) || '—';
+                } else {
+                    outputLine.innerText = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result);
+                }
+                term.appendChild(outputLine);
+            } catch (err) {
+                const errLine = document.createElement('div');
+                errLine.className = 'text-red-500 opacity-90';
+                errLine.innerText = '错误：' + err.message;
+                term.appendChild(errLine);
+            }
+            term.scrollTop = term.scrollHeight;
+        });
+
+        function toggleTheme() { document.body.classList.toggle('light-mode'); lucide.createIcons(); }
+        function resetLayout() {
+            document.getElementById('left-panel').style.width = '260px';
+            document.getElementById('right-panel').style.width = '320px';
+        }
+        function toggleSettings() {
+            const panel = document.getElementById('settings-panel');
+            panel.classList.toggle('hidden');
+            if (!panel.classList.contains('hidden')) {
+                document.getElementById('settings-worker-url').value = WORKER;
+                document.getElementById('settings-backend-url').value = localStorage.getItem('logos_backend') || '';
+            }
+        }
+        function saveWorkerAndReload() {
+            const url = document.getElementById('settings-worker-url').value.trim();
+            if (url) localStorage.setItem('logos_worker', url);
+            const backend = document.getElementById('settings-backend-url').value.trim();
+            localStorage.setItem('logos_backend', backend);
+            location.reload();
+        }
+
+        let sec = 0;
+        setInterval(() => {
+            sec++;
+            const h = Math.floor(sec/3600).toString().padStart(2,'0');
+            const m = Math.floor((sec%3600)/60).toString().padStart(2,'0');
+            const s = (sec%60).toString().padStart(2,'0');
+            document.getElementById('uptime').innerText = `${h}:${m}:${s}`;
+        }, 1000);
+
+        async function updateSystemStatus() {
+            try {
+                const [statusRes, seedRes, learnRes] = await Promise.all([
+                    fetch(WORKER + '/status'),
+                    fetch(WORKER + '/seed').catch(() => null),
+                    fetch(WORKER + '/learn/stats').catch(() => null)
+                ]);
+                const status = await statusRes.json();
+                let seedInfo = { rules_count: 0, size_estimate: '-' };
+                let learnStats = { adopted: 0, total: 0 };
+                if (seedRes && seedRes.ok) seedInfo = await seedRes.json();
+                if (learnRes && learnRes.ok) learnStats = await learnRes.json();
+                const loadEl = document.getElementById('left-kernel-pct');
+                const barEl = document.getElementById('left-kernel-bar');
+                const indexEl = document.getElementById('left-index-mb');
+                if (loadEl) loadEl.innerText = (status.kernel_load != null ? status.kernel_load : 0) + '%';
+                if (barEl) barEl.style.width = (status.kernel_load != null ? status.kernel_load : 0) + '%';
+                var indexVal = status.index_size_mb != null ? status.index_size_mb : (status.index_size != null ? status.index_size : '0');
+                if (typeof indexVal === 'number') indexVal = indexVal + ' MB';
+                if (indexEl) indexEl.innerText = indexVal;
+                const tbody = document.getElementById('right-metrics-tbody');
+                if (tbody) {
+                    const m = status.metrics || {};
+                    const pm = status.processing_time_ms != null ? status.processing_time_ms : 0;
+                    const pmClass = pm < 100 ? 'text-green-500' : 'text-yellow-500';
+                    let uptimeStr = '—';
+                    const rawUptime = status.uptime_seconds;
+                    if (rawUptime != null && typeof rawUptime === 'number') {
+                        if (rawUptime < 0) uptimeStr = '—';
+                        else if (rawUptime >= 2e9) uptimeStr = '—';
+                        else {
+                            const h = Math.floor(rawUptime / 3600);
+                            const min = Math.floor((rawUptime % 3600) / 60);
+                            if (h > 0) uptimeStr = h + ' h ' + min + ' m';
+                            else uptimeStr = min + ' m';
+                        }
+                    }
+                    const cacheRow = status.cache_hit ? '<tr class="h-7"><td colspan="2" class="text-center text-xs opacity-60">⚡ 缓存命中</td></tr>' : '';
+                    tbody.innerHTML = '<tr class="h-7"><td>命中率</td><td class="text-right font-bold text-green-700">' + (m.hit_rate != null ? m.hit_rate : '—') + '%</td></tr>' +
+                        '<tr class="h-7"><td>显式回退</td><td class="text-right font-bold">' + (m.fallback_count != null ? m.fallback_count : '—') + '</td></tr>' +
+                        '<tr class="h-7"><td>身份漂移</td><td class="text-right font-bold">' + (m.identity_drift != null ? m.identity_drift : '—') + '</td></tr>' +
+                        '<tr class="h-7"><td>运行时长</td><td class="text-right font-bold">' + uptimeStr + '</td></tr>' +
+                        '<tr class="h-7"><td>Worker延迟</td><td class="text-right font-bold ' + pmClass + '">' + pm + 'ms</td></tr>' +
+                        '<tr class="h-7"><td>种子规则</td><td class="text-right font-bold">' + (seedInfo.rules_count != null ? seedInfo.rules_count : 0) + ' rules</td></tr>' +
+                        '<tr class="h-7"><td>种子大小</td><td class="text-right font-bold">' + (seedInfo.size_estimate || '—') + '</td></tr>' +
+                        '<tr class="h-7"><td>学习模式</td><td class="text-right font-bold">' + (learnStats.adopted != null ? learnStats.adopted + ' adopted' : '—') + '</td></tr>' + cacheRow;
+                }
+                const readyIndicator = document.getElementById('system-ready');
+                if (readyIndicator) {
+                    readyIndicator.className = (status.kernel_load != null && status.kernel_load > 80) ? 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse' : 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                }
+                const logStream = document.getElementById('logic-stream');
+                if (logStream && status.recent_logs && status.recent_logs.length) {
+                    status.recent_logs.forEach(log => {
+                        const div = document.createElement('div');
+                        div.innerHTML = '[' + new Date(log.timestamp).toLocaleTimeString('zh-CN', {hour12: false}) + '] [' + log.type + '] ' + log.message;
+                        logStream.prepend(div);
+                        while (logStream.children.length > 15) logStream.removeChild(logStream.lastChild);
+                    });
+                }
+            } catch (e) {
+                console.error('updateSystemStatus', e);
+                const loadEl = document.getElementById('left-kernel-pct');
+                const barEl = document.getElementById('left-kernel-bar');
+                const indexEl = document.getElementById('left-index-mb');
+                if (loadEl) loadEl.innerText = '—';
+                if (barEl) barEl.style.width = '0%';
+                if (indexEl) indexEl.innerText = '—';
+                const tbody = document.getElementById('right-metrics-tbody');
+                if (tbody) {
+                    tbody.innerHTML = '<tr class="h-7"><td>命中率</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>显式回退</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>身份漂移</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>运行时长</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>Worker延迟</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>种子规则</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>种子大小</td><td class="text-right font-bold">—</td></tr>' +
+                        '<tr class="h-7"><td>学习模式</td><td class="text-right font-bold">未连接</td></tr>';
+                }
+                const readyIndicator = document.getElementById('system-ready');
+                if (readyIndicator) readyIndicator.className = 'w-2 h-2 bg-red-500 rounded-full animate-pulse';
+            }
+        }
+        setInterval(updateSystemStatus, 2000);
+        updateSystemStatus();
+
+        async function createTask(description) {
+            try {
+                const r = await fetch(WORKER + '/task/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: description })
+                });
+                const task = await r.json();
+                const card = document.createElement('div');
+                card.className = 'border border-[var(--border-color)] p-3 rounded-sm text-sm bg-[var(--bg-main)]';
+                card.id = 'task-' + task.taskId;
+                card.innerHTML = '<div class="font-bold truncate">' + description + '</div><div class="task-status text-xs opacity-70">等待中</div><div class="mt-2 space-y-1">' +
+                    (task.steps || []).map((s, i) => '<div id="step-' + task.taskId + '-' + i + '" class="flex items-center gap-2 text-xs"><span class="w-3 h-3 bg-gray-500 rounded-full"></span><span>' + (s.label || s.name) + '</span><span class="step-progress">0%</span></div>').join('') + '</div>';
+                document.getElementById('task-queue').appendChild(card);
+                pollTaskStatus(task.taskId);
+            } catch (e) {
+                console.error('createTask', e);
+                alert('创建任务失败: ' + e.message);
+            }
+        }
+        function pollTaskStatus(taskId) {
+            const iv = setInterval(async () => {
+                try {
+                    const r = await fetch(WORKER + '/task/' + taskId + '/status');
+                    if (!r.ok) { clearInterval(iv); return; }
+                    const task = await r.json();
+                    const card = document.getElementById('task-' + taskId);
+                    if (!card) { clearInterval(iv); return; }
+                    const st = card.querySelector('.task-status');
+                    if (st) {
+                        if (task.status === 'running') st.innerText = '执行中';
+                        else if (task.status === 'completed') st.innerText = '✓ 完成';
+                        else if (task.status === 'failed') st.innerText = '✗ 失败';
+                        else st.innerText = '等待中';
+                    }
+                    (task.steps || []).forEach((step, i) => {
+                        const el = document.getElementById('step-' + taskId + '-' + i);
+                        if (!el) return;
+                        const dot = el.querySelector('.w-3');
+                        const prog = el.querySelector('.step-progress');
+                        if (step.status === 'completed') {
+                            if (dot) { dot.className = 'w-3 h-3 bg-green-500 rounded-full'; }
+                            if (prog) prog.innerText = '✓';
+                        } else if (step.status === 'running') {
+                            if (dot) { dot.className = 'w-3 h-3 bg-yellow-500 rounded-full animate-pulse'; }
+                            if (prog) prog.innerText = step.progress + '%';
+                        } else if (step.status === 'failed') {
+                            if (dot) { dot.className = 'w-3 h-3 bg-red-500 rounded-full'; }
+                            if (prog) prog.innerText = '✗';
+                        }
+                    });
+                    if (task.status === 'completed' || task.status === 'failed') {
+                        clearInterval(iv);
+                        const term = document.getElementById('terminal');
+                        const msg = document.createElement('div');
+                        msg.className = task.status === 'completed' ? 'text-green-500' : 'text-red-500';
+                        msg.innerText = '任务 ' + taskId + ': ' + (task.status === 'completed' ? '已完成' : task.status === 'failed' ? '失败' : task.status);
+                        term.appendChild(msg);
+                        term.scrollTop = term.scrollHeight;
+                    }
+                } catch (e) { clearInterval(iv); }
+            }, 1000);
+        }
+        function clearCompletedTasks() {
+            const queue = document.getElementById('task-queue');
+            queue.querySelectorAll('[id^="task-"]').forEach(card => {
+                const st = card.querySelector('.task-status');
+                if (st && (st.innerText.includes('完成') || st.innerText.includes('失败'))) card.remove();
+            });
+        }
+
+        async function updateEvolutionQueue() {
+            try {
+                const r = await fetch(WORKER + '/evolution/list');
+                const candidates = await r.json();
+                const queue = document.getElementById('evolution-queue');
+                if (!queue) return;
+                queue.innerHTML = (candidates.length ? candidates.map(c => {
+                    const status = c.status || 'pending';
+                    const cls = status === 'passed' ? 'bg-green-500/20 text-green-500' : status === 'failed' ? 'bg-red-500/20 text-red-500' : 'bg-yellow-500/20 text-yellow-500';
+                    return '<div class="border border-[var(--border-color)] p-2 rounded-sm"><div class="font-bold">' + (c.source || '') + '</div><div class="opacity-60 text-[10px] truncate">' + (c.description || '') + '</div><div class="mt-1"><span class="px-2 py-0.5 rounded text-[9px] ' + cls + '">' + status + '</span></div></div>';
+                }).join('') : '<div class="opacity-40 text-[10px]">暂无候选逻辑</div>');
+            } catch (e) { console.error('updateEvolutionQueue', e); }
+        }
+        setInterval(updateEvolutionQueue, 10000);
+        updateEvolutionQueue();
+
+        async function updateLearningLog() {
+            try {
+                const [patterns, stats] = await Promise.all([
+                    fetch(WORKER + '/learn/patterns?limit=10&status=pending').then(r => r.json()),
+                    fetch(WORKER + '/learn/stats').then(r => r.json())
+                ]);
+                const statsEl = document.getElementById('learning-stats');
+                if (statsEl && stats) {
+                    statsEl.innerText = (stats.total || 0) + ' 条模式 | ' + (stats.adopted || 0) + ' 条已采纳';
+                }
+                const log = document.getElementById('learning-log');
+                if (log && patterns && patterns.length > 0) {
+                    log.innerHTML = patterns.map(p => {
+                        const time = new Date(p.learned_at).toLocaleTimeString('zh-CN', { hour12: false });
+                        return '<div class="border border-[var(--border-color)] p-2 rounded-sm"><div class="opacity-60 text-[10px]">' + time + '</div><div class="font-bold truncate">' + (p.pattern_keywords || '') + '</div><div class="opacity-60 text-[10px]">来自 ' + (p.source || '') + ' | 置信度 ' + ((p.confidence || 0) * 100).toFixed(0) + '%</div><div class="mt-1"><span class="px-2 py-0.5 rounded text-[9px] bg-[var(--border-color)]">' + (p.status || 'pending') + '</span></div></div>';
+                    }).join('');
+                } else if (log) {
+                    log.innerHTML = '暂无学习记录';
+                }
+            } catch (e) { console.error('updateLearningLog', e); }
+        }
+        setInterval(updateLearningLog, 10000);
+        updateLearningLog();
+
+        async function testLongContext() {
+            const terminal = document.getElementById('terminal');
+            const msg = document.createElement('div');
+            msg.innerText = '测试长上下文处理...';
+            terminal.appendChild(msg);
+            const longText = '深度学习是机器学习的一个分支。'.repeat(100);
+            try {
+                const response = await fetch(WORKER + '/expand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: longText }) });
+                const result = await response.json();
+                const resultMsg = document.createElement('div');
+                if (result.error) {
+                    resultMsg.className = 'text-red-500';
+                    resultMsg.innerText = '✗ ' + result.error;
+                } else {
+                    resultMsg.className = 'text-green-500';
+                    resultMsg.innerText = '✓ 处理' + (result.input_length ?? '?') + '字符，分' + (result.segments_count ?? '?') + '段' + (result.truncated ? '（已截断）' : '');
+                }
+                terminal.appendChild(resultMsg);
+            } catch (error) {
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'text-red-500';
+                errorMsg.innerText = '✗ 错误: ' + error.message;
+                terminal.appendChild(errorMsg);
+            }
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        async function testEnhancement() {
+            const terminal = document.getElementById('terminal');
+            const msg = document.createElement('div');
+            msg.innerText = '测试递归增强...';
+            terminal.appendChild(msg);
+            try {
+                const response = await fetch(WORKER + '/enhance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: '如何优化系统性能？' }) });
+                const result = await response.json();
+                const resultMsg = document.createElement('div');
+                if (result.error) {
+                    resultMsg.className = 'text-red-500';
+                    resultMsg.innerText = '✗ ' + result.error;
+                } else {
+                    resultMsg.className = 'text-green-500';
+                    const lastDetail = result.layer_details && result.layer_details.length ? result.layer_details[result.layer_details.length - 1] : null;
+                    resultMsg.innerText = '✓ 使用' + (result.layers_used ?? '?') + '层增强，最终置信度' + (lastDetail != null && lastDetail.confidence != null ? (lastDetail.confidence * 100).toFixed(1) : '-') + '%';
+                }
+                terminal.appendChild(resultMsg);
+            } catch (error) {
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'text-red-500';
+                errorMsg.innerText = '✗ 错误: ' + error.message;
+                terminal.appendChild(errorMsg);
+            }
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+    </script>
+</body>
+</html>

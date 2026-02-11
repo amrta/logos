@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 580" font-family="system-ui, sans-serif">
+  <defs>
+    <linearGradient id="mg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3d5a80"/>
+      <stop offset="100%" style="stop-color:#4a6a90"/>
+    </linearGradient>
+    <linearGradient id="po" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#5a7a9a"/>
+      <stop offset="100%" style="stop-color:#6a8aaa"/>
+    </linearGradient>
+    <filter id="sh" x="-2" y="-2" width="4" height="4">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.25"/>
+    </filter>
+    <marker id="ar" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#6a9fb8"/>
+    </marker>
+    <marker id="ar2" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#8ab8c8"/>
+    </marker>
+  </defs>
+  <rect width="820" height="580" fill="#1a2332"/>
+  <text x="410" y="28" text-anchor="middle" fill="#d0d8e0" font-size="16" font-weight="600">尿袋管理器 + 尿袋层</text>
+
+  <!-- 尿袋管理器 -->
+  <g transform="translate(24, 44)">
+    <rect width="280" height="248" rx="8" fill="url(#mg)" filter="url(#sh)" stroke="#4a7a9a" stroke-width="1"/>
+    <text x="12" y="26" fill="#b0c8e0" font-size="13" font-weight="600">尿袋管理器</text>
+    <text x="12" y="42" fill="#8098b0" font-size="9">调度: call sync 参数 pf</text>
+    <line x1="12" y1="50" x2="268" y2="50" stroke="#5a8aaa" stroke-width="1"/>
+
+    <g transform="translate(12, 58)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">调</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">call_pouch</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(98, 58)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">同</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">sync_patterns</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(184, 58)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">参</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">参数</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(270, 58)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">pf</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">clamp/score</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+
+    <g transform="translate(12, 110)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">进</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">进化/1%</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(98, 110)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">推荐</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">推荐/进</text>
+      <text x="39" y="38" text-anchor="middle" fill="#e8c87e" font-size="10" font-weight="600">70%</text>
+    </g>
+    <g transform="translate(184, 110)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">learn_</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">routing</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(270, 110)">
+      <rect x="0" y="0" width="78" height="44" rx="4" fill="rgba(255,255,255,0.08)" stroke="#5a8aaa"/>
+      <text x="39" y="14" text-anchor="middle" fill="#c0d8f0" font-size="9">catalog</text>
+      <text x="39" y="28" text-anchor="middle" fill="#90b0d0" font-size="8">instantiate</text>
+      <text x="39" y="38" text-anchor="middle" fill="#7ec8e3" font-size="10" font-weight="600">100%</text>
+    </g>
+
+    <text x="12" y="178" fill="#7088a0" font-size="9">依赖 (管理器 → 尿袋</text>
+    <text x="12" y="192" fill="#7088a0" font-size="9">尿袋 → 管理器: is_fallback / recommended_* / evolution_gaps</text>
+  </g>
+
+  <!-- 管理器 → 尿袋层 -->
+  <path d="M 304 180 L 380 180" stroke="#6a9fb8" stroke-width="1.5" fill="none" marker-end="url(#ar)"/>
+  <text x="342" y="172" text-anchor="middle" fill="#8ab0c8" font-size="8">call</text>
+  <path d="M 304 220 L 380 220" stroke="#6a9fb8" stroke-width="1.5" fill="none" marker-end="url(#ar)"/>
+  <text x="342" y="212" text-anchor="middle" fill="#8ab0c8" font-size="8">sync_patterns</text>
+  <path d="M 304 260 L 380 260" stroke="#6a9fb8" stroke-width="1.5" fill="none" marker-end="url(#ar)"/>
+  <text x="342" y="252" text-anchor="middle" fill="#8ab0c8" font-size="8">learn_routing</text>
+
+  <!-- 尿袋层 → 管理器 -->
+  <path d="M 516 200 L 440 200" stroke="#8ab8c8" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
+  <text x="478" y="192" text-anchor="middle" fill="#9ac0d8" font-size="8">result</text>
+  <path d="M 516 340 L 440 340" stroke="#8ab8c8" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
+  <text x="478" y="332" text-anchor="middle" fill="#9ac0d8" font-size="8">recommended_*</text>
+  <path d="M 516 380 L 440 380" stroke="#8ab8c8" stroke-width="1.5" fill="none" marker-end="url(#ar2)"/>
+  <text x="478" y="372" text-anchor="middle" fill="#9ac0d8" font-size="8">evolution_gaps</text>
+
+  <!-- 尿袋层 -->
+  <g transform="translate(520, 44)">
+    <rect width="276" height="488" rx="8" fill="url(#po)" filter="url(#sh)" stroke="#6a9aaa" stroke-width="1"/>
+    <text x="12" y="26" fill="#c0d8e8" font-size="13" font-weight="600">尿袋层</text>
+    <text x="12" y="42" fill="#90a8c0" font-size="9">多尿袋 与 多能力 与 sync</text>
+    <line x1="12" y1="50" x2="264" y2="50" stroke="#6a9aaa" stroke-width="1"/>
+
+    <g transform="translate(12, 58)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.1)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#d0e0f0" font-size="9">Language</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0c0d8" font-size="8">sync_buffer</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(98, 58)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.1)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#d0e0f0" font-size="9">catalog</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0c0d8" font-size="8">instantiate</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(184, 58)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.1)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#d0e0f0" font-size="9">Memory</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0c0d8" font-size="8">sync_buffer</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+
+    <g transform="translate(12, 106)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Defect</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">follow_ups</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(98, 106)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Capability</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">gaps_output</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(184, 106)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Reasoning</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">is_fallback</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(270, 106)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Creative</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">E1</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+
+    <g transform="translate(12, 154)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Remote</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">远端</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(98, 154)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">Pipeline</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">/pipeline</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+    <g transform="translate(184, 154)">
+      <rect x="0" y="0" width="80" height="40" rx="4" fill="rgba(255,255,255,0.08)" stroke="#7a9aba"/>
+      <text x="40" y="14" text-anchor="middle" fill="#c0d8e8" font-size="9">物料</text>
+      <text x="40" y="28" text-anchor="middle" fill="#a0b8d0" font-size="8">Material&amp;</text>
+      <text x="40" y="36" text-anchor="middle" fill="#7ec8e3" font-size="9" font-weight="600">100%</text>
+    </g>
+
+    <!-- 闭环 -->
+    <rect x="12" y="208" width="252" height="88" rx="6" fill="rgba(100,160,200,0.12)" stroke="#5a8aaa" stroke-dasharray="3 2"/>
+    <text x="138" y="228" text-anchor="middle" fill="#90b8d0" font-size="10" font-weight="600">闭环</text>
+    <text x="138" y="246" text-anchor="middle" fill="#80a8c0" font-size="9">管理器 → 尿袋: call_pouch / execute_plan / run_pipeline / sync_patterns / learn_routing → Language</text>
+    <text x="138" y="262" text-anchor="middle" fill="#80a8c0" font-size="9">尿袋 → 管理器: result / is_fallback_output / recommended_follow_ups / evolution_gaps_from_output</text>
+    <text x="138" y="278" text-anchor="middle" fill="#80a8c0" font-size="9">管理器: catalog.instantiate 与 evolution_chain 进化/1% 与 pf 与 1/KG</text>
+  </g>
+
+  <!-- 图例 -->
+  <g transform="translate(24, 528)">
+    <rect x="0" y="0" width="12" height="12" rx="2" fill="#7ec8e3"/>
+    <text x="18" y="10" fill="#90a0b0" font-size="9">100% 完成</text>
+    <rect x="100" y="0" width="12" height="12" rx="2" fill="#e8c87e"/>
+    <text x="118" y="10" fill="#90a0b0" font-size="9">70% 短板</text>
+    <text x="200" y="10" fill="#708090" font-size="9">完成 管理器→尿袋</text>
+    <text x="320" y="10" fill="#708090" font-size="9">尿袋→管理器</text>
+  </g>
+</svg>

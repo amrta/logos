@@ -1,0 +1,32 @@
+[
+  {
+    "id": "seed_how",
+    "pattern": "^(如何|怎么|怎样)",
+    "response_template": "步骤式回答",
+    "coverage": 283
+  },
+  {
+    "id": "seed_what",
+    "pattern": "(什么是|是什么|啥是)",
+    "response_template": "定义式回答",
+    "coverage": 795
+  },
+  {
+    "id": "seed_why",
+    "pattern": "^为什么",
+    "response_template": "因果式回答",
+    "coverage": 80
+  },
+  {
+    "id": "seed_question",
+    "pattern": "[?？]$",
+    "response_template": "疑问式回答",
+    "coverage": 2352
+  },
+  {
+    "id": "seed_fallback",
+    "pattern": ".*",
+    "response_template": "通用回答",
+    "coverage": 7750
+  }
+]

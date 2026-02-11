@@ -1,0 +1,43 @@
+name: Cloud language train and eval
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/orchestrator.rs'
+      - 'src/language_pouch.rs'
+      - 'src/bin/clean_language_data.rs'
+      - 'src/main.rs'
+      - '.github/workflows/cloud-language-train.yml'
+  workflow_dispatch:
+
+jobs:
+  train-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Build clean_language_data and logos
+        run: |
+          cargo build --release --bin clean_language_data --bin logos
+
+      - name: Prepare sample and run import+eval
+        run: |
+          mkdir -p data
+          printf '%s\n' \
+            '{"human":"你好请介绍一下自己","gpt":"我是LOGOS，本地分形学习系统。"}' \
+            '{"human":"什么是尿袋","gpt":"尿袋是LOGOS的可插拔能力模块。"}' \
+            '{"human":"你能学习吗","gpt":"会。自动学习与显式教学两种方式。"}' \
+            > data/ci_sample.jsonl
+          LOGOS_DATA=./data ./target/release/logos --import data/ci_sample.jsonl --eval data/ci_sample.jsonl
+
+      - name: Upload eval artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-result
+          path: data/eval_result.jsonl

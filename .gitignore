@@ -1,0 +1,14 @@
+target/
+Cargo.lock
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+build.log
+final_build.log
+getout/
+logs/
+*.backup
+export/*.tar.gz

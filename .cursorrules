@@ -1,0 +1,5 @@
+严格禁止：注释、TODO、#[allow]、mock、placeholder、解释；禁止修改 .git/config、git remote，除非用户明确要求
+强制要求：每次修改提供验证命令，只输出 diff
+验证标准：无法复现 = 未实现
+进化原则：改动前必须生成风险预演表（见 EVOLUTION_DISCIPLINE.md），通过预演才动代码
+零熵指引：改动前必须对照 ZERO_ENTROPY_BLUEPRINT.md，确认不偏离架构哲学

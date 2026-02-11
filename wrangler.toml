@@ -1,0 +1,28 @@
+name = "logos-gateway"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+[triggers]
+cron = ["*/15 * * * *"]
+
+# 仅用 D1 无需 vars。若加 Supabase 等，请在 Dashboard 用 Encrypt(Secrets) 添加，否则部署会覆盖明文 Variable
+
+# 部署前必填：account_id（Cloudflare 账户 ID）、routes[].zone_id（若用自定义域名）
+# 可从 Dashboard 或 wrangler whoami 获取；不填则 wrangler deploy 会报错
+[env.production]
+name = "logos-gateway-prod"
+routes = [
+  { pattern = "logos-gateway.amrta.workers.dev/*", zone_id = "" }
+]
+account_id = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "logos"
+database_id = "fba2833f-b0f6-424a-89ad-4367431b2897"
+
+# 可选：验证端点需 eval_result/sharegpt 时，可用 R2 或 POST body。
+# 若启用 R2：取消下面注释，并先执行 wrangler r2 bucket create logos-verification
+# [[r2_buckets]]
+# binding = "LOGOS_BUCKET"
+# bucket_name = "logos-verification"
