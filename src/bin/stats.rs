@@ -62,9 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if raw_hit {
             hits += 1;
         }
-        if args.strict && raw_hit && is_valid_hit_strict(output) {
-            hits_strict += 1;
-        } else if !args.strict && raw_hit {
+        if raw_hit && (!args.strict || is_valid_hit_strict(output)) {
             hits_strict += 1;
         }
 

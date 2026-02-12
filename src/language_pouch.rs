@@ -93,6 +93,31 @@ pub const MAX_CONTEXT_TURNS: usize = 10;
 
 const SYNC_BUFFER_MAX: usize = 50;
 const SYNC_MATCH_THRESHOLD: f64 = 0.6;
+const REINFORCE_RATE: f64 = 0.2;
+const DECAY_RATE: f64 = 0.15;
+const MISS_BUFFER_MAX: usize = 200;
+const FEEDBACK_LOG_MAX: usize = 500;
+const STALE_TICK_THRESHOLD: u64 = 500;
+const STALE_DECAY_FACTOR: f64 = 0.95;
+const ABSORB_WEIGHT: f64 = 1.2;
+const ABSORB_MERGE_THRESHOLD: f64 = 0.85;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackRecord {
+    pub input_trunc: String,
+    pub response_trunc: String,
+    pub signal: i8,
+    pub correction: String,
+    pub timestamp: u64,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FeedbackState {
+    log: Vec<FeedbackRecord>,
+    misses: Vec<(Vec<String>, String)>,
+    absorbed: usize,
+}
 
 pub struct LanguagePouch {
     patterns: Vec<Pattern>,
@@ -102,6 +127,10 @@ pub struct LanguagePouch {
     sync_buffer: Vec<(Vec<String>, String)>,
     context: Vec<(String, String)>,
     last_was_pattern_hit: bool,
+    last_match_weight: f64,
+    miss_buffer: Vec<(Vec<String>, String)>,
+    feedback_log: Vec<FeedbackRecord>,
+    absorbed_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +151,10 @@ impl LanguagePouch {
             sync_buffer: Vec::new(),
             context: Vec::new(),
             last_was_pattern_hit: false,
+            last_match_weight: 0.0,
+            miss_buffer: Vec::new(),
+            feedback_log: Vec::new(),
+            absorbed_count: 0,
         };
         p.seed();
         p
@@ -164,12 +197,13 @@ impl LanguagePouch {
             (&["你好笨"], "同意。当前模式少，所以重复。多对话、多教我，会改善。"),
             (&["继续"], "请告诉我继续做什么。"),
         ];
-        for (tokens, resp) in seeds {
-            self.add_pattern(
-                tokens.iter().map(|s| s.to_string()).collect(),
-                resp.to_string(),
-                1.0,
-            );
+        for (triggers, resp) in seeds {
+            for trigger in *triggers {
+                let tokens = self.tokenize(trigger);
+                if !tokens.is_empty() {
+                    self.add_pattern(tokens, resp.to_string(), 1.0);
+                }
+            }
         }
     }
 
@@ -182,6 +216,24 @@ impl LanguagePouch {
             bincode::deserialize(data).map_err(|e| format!("反序列化失败: {}", e))?;
         self.patterns = patterns;
         self.rebuild_index();
+        Ok(())
+    }
+
+    pub fn save_feedback(&self) -> Result<Vec<u8>, String> {
+        let state = FeedbackState {
+            log: self.feedback_log.clone(),
+            misses: self.miss_buffer.clone(),
+            absorbed: self.absorbed_count,
+        };
+        serde_json::to_vec(&state).map_err(|e| format!("序列化失败: {}", e))
+    }
+
+    pub fn load_feedback(&mut self, data: &[u8]) -> Result<(), String> {
+        let state: FeedbackState =
+            serde_json::from_slice(data).map_err(|e| format!("反序列化失败: {}", e))?;
+        self.feedback_log = state.log;
+        self.miss_buffer = state.misses;
+        self.absorbed_count = state.absorbed;
         Ok(())
     }
 
@@ -263,6 +315,12 @@ impl LanguagePouch {
             || text.contains("不认识这个表达")
             || text.contains("无法理解")
             || text.contains("请说具体一点")
+            || text.contains("还不会答")
+            || text.contains("还没学过")
+            || text.contains("还对不上")
+            || text.contains("没匹配到")
+            || text.contains("暂时做不了")
+            || text.contains("能再说具体一点")
     }
 
     pub fn export_summary(&self) -> String {
@@ -319,6 +377,31 @@ impl LanguagePouch {
             .replace("&quot;", "\"")
             .trim()
             .to_string()
+    }
+
+    pub fn batch_teach_from_content(&mut self, content: &str) -> usize {
+        let mut count = 0usize;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let v: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let trigger = v.get("input").or_else(|| v.get("human")).or_else(|| v.get("instruction"))
+                .or_else(|| v.get("question")).or_else(|| v.get("prompt"))
+                .and_then(|h| h.as_str()).unwrap_or("").trim().to_string();
+            let response = v.get("reference").or_else(|| v.get("gpt")).or_else(|| v.get("output"))
+                .or_else(|| v.get("assistant")).or_else(|| v.get("target"))
+                .or_else(|| v.get("solution")).or_else(|| v.get("response")).or_else(|| v.get("text"))
+                .and_then(|g| g.as_str()).unwrap_or("").trim().to_string();
+            if trigger.is_empty() || response.is_empty() { continue; }
+            let response = Self::strip_html(&response);
+            if response.is_empty() { continue; }
+            self.teach(&trigger, &response);
+            count += 1;
+        }
+        count
     }
 
     pub fn import_from_content(&mut self, content: &str, is_jsonl: bool) -> Result<usize, String> {
@@ -453,12 +536,10 @@ impl LanguagePouch {
         let mut best: Option<(&str, f64)> = None;
         for (rt, pouch_name) in &self.route_patterns {
             let common = tokens.iter().filter(|t| rt.contains(t)).count();
-            let sim = if tokens.len() > rt.len() {
-                common as f64 / tokens.len() as f64
-            } else {
-                common as f64 / rt.len().max(1) as f64
-            };
-            if sim > 0.6 && best.is_none_or(|(_, s)| sim > s) {
+            let coverage = common as f64 / rt.len().max(1) as f64;
+            let relevance = common as f64 / tokens.len().max(1) as f64;
+            let sim = coverage * 0.7 + relevance * 0.3;
+            if sim > 0.5 && coverage > 0.6 && best.is_none_or(|(_, s)| sim > s) {
                 best = Some((pouch_name.as_str(), sim));
             }
         }
@@ -470,16 +551,26 @@ impl LanguagePouch {
         })
     }
 
-    fn tokenize(&self, input: &str) -> Vec<String> {
-        input
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| c.to_string())
-            .collect()
+    pub fn tokenize(&self, input: &str) -> Vec<String> {
+        let chars: Vec<char> = input.chars().filter(|c| !c.is_whitespace()).collect();
+        if chars.len() < 4 {
+            return chars.iter().map(|c| c.to_string()).collect();
+        }
+        let mut tokens: Vec<String> = Vec::with_capacity(chars.len() * 2);
+        for c in &chars {
+            tokens.push(c.to_string());
+        }
+        for pair in chars.windows(2) {
+            tokens.push(pair.iter().collect());
+        }
+        tokens
     }
 
     pub async fn process(&mut self, input: &str) -> String {
         self.tick += 1;
+        if self.tick.is_multiple_of(100) {
+            self.decay_stale();
+        }
         let input = if input.len() > bedrock::MAX_INPUT_LEN {
             let mut end = bedrock::MAX_INPUT_LEN;
             while !input.is_char_boundary(end) && end > 0 {
@@ -501,9 +592,8 @@ impl LanguagePouch {
 
         let matches = self.root.search(&tokens, 0);
         let mut best: Option<(usize, f64)> = None;
-        const MIN_PATTERN_TOKENS: usize = 4;
-        let min_len = (tokens.len() as f64 * 0.25).ceil() as usize;
-        let min_pattern_len = MIN_PATTERN_TOKENS.max(min_len.min(20));
+        let char_count = input.chars().filter(|c| !c.is_whitespace()).count();
+        let min_pattern_tokens: usize = if char_count <= 4 { 1 } else { 2 };
 
         for (id, sim) in matches {
             if id >= self.patterns.len() {
@@ -513,10 +603,20 @@ impl LanguagePouch {
                 continue;
             }
             let p = &self.patterns[id];
-            if p.tokens.len() < min_pattern_len {
+            if p.tokens.len() < min_pattern_tokens {
                 continue;
             }
-            let score = sim * p.weight * (p.frequency as f64).ln().max(1.0) * (1.0 + 0.05 * p.tokens.len() as f64);
+            let p_distinct: std::collections::HashSet<&String> = p.tokens.iter().collect();
+            let i_distinct: std::collections::HashSet<&String> = tokens.iter().collect();
+            let overlap = p_distinct.intersection(&i_distinct).count();
+            let p_cov = overlap as f64 / p_distinct.len().max(1) as f64;
+            let i_cov = overlap as f64 / i_distinct.len().max(1) as f64;
+            let h_cov = if p_cov > 0.0 && i_cov > 0.0 { 2.0 * p_cov * i_cov / (p_cov + i_cov) } else { 0.0 };
+            if h_cov < 0.3 {
+                continue;
+            }
+            let freshness = 1.0 / (1.0 + (self.tick.saturating_sub(p.last_used) as f64) * 0.001);
+            let score = sim * p.weight * (p.frequency as f64).ln().max(1.0) * freshness * h_cov;
             if best.is_none_or(|(_, s)| score > s) {
                 best = Some((id, score));
             }
@@ -524,29 +624,289 @@ impl LanguagePouch {
 
         if let Some((id, _)) = best {
             self.patterns[id].frequency += 1;
-            self.patterns[id].weight += bedrock::LEARNING_RATE;
+            self.patterns[id].weight = (self.patterns[id].weight + bedrock::LEARNING_RATE).min(10.0);
             self.patterns[id].last_used = self.tick;
             let response = self.patterns[id].response.clone();
             self.push_context(input.to_string(), response.clone());
             self.last_was_pattern_hit = true;
+            self.last_match_weight = self.patterns[id].weight;
             return response;
         }
 
         self.last_was_pattern_hit = false;
-        let fallback = if let Some(sync_response) = self.sync_buffer_fallback(&tokens) {
-            sync_response
-        } else if let Some(ctx_response) = self.context_fallback(input) {
-            ctx_response
-        } else {
-            self.honest_fallback(input)
-        };
+        self.last_match_weight = 0.0;
 
-        let tokens_for_learn = tokens.clone();
-        let fallback_for_learn = fallback.clone();
-        self.learn_from_input(&tokens_for_learn, &fallback_for_learn);
+        if let Some(sync_response) = self.sync_buffer_fallback(&tokens) {
+            self.absorb_internal(input, &sync_response, ABSORB_WEIGHT);
+            self.push_context(input.to_string(), sync_response.clone());
+            self.last_was_pattern_hit = true;
+            return sync_response;
+        }
 
+        if let Some(ctx_response) = self.context_fallback(input) {
+            self.push_context(input.to_string(), ctx_response.clone());
+            return ctx_response;
+        }
+
+        self.record_miss(input, &tokens);
+        let fallback = self.honest_fallback(input);
         self.push_context(input.to_string(), fallback.clone());
         fallback
+    }
+
+    pub fn reinforce(&mut self, input: &str) -> bool {
+        if let Some(id) = self.find_best_overlap(input) {
+            self.patterns[id].weight = (self.patterns[id].weight * (1.0 + REINFORCE_RATE)).min(10.0);
+            self.patterns[id].frequency += 1;
+            self.patterns[id].last_used = self.tick;
+            let resp = self.patterns[id].response.clone();
+            self.log_feedback(input, &resp, 1, String::new(), "reinforce");
+            return true;
+        }
+        false
+    }
+
+    pub fn penalize(&mut self, input: &str) -> bool {
+        if let Some(id) = self.find_best_overlap(input) {
+            self.patterns[id].weight = (self.patterns[id].weight * (1.0 - DECAY_RATE)).max(0.1);
+            let resp = self.patterns[id].response.clone();
+            self.log_feedback(input, &resp, -1, String::new(), "penalize");
+            return true;
+        }
+        false
+    }
+
+    fn find_best_overlap(&self, input: &str) -> Option<usize> {
+        let tokens = self.tokenize(input);
+        if tokens.is_empty() {
+            return None;
+        }
+        let mut best_idx: Option<usize> = None;
+        let mut best_score: f64 = 0.0;
+        for (i, p) in self.patterns.iter().enumerate() {
+            let common = p.tokens.iter().filter(|t| tokens.contains(t)).count();
+            let denom = p.tokens.len().max(tokens.len());
+            if denom == 0 {
+                continue;
+            }
+            let overlap = common as f64 / denom as f64;
+            if overlap > best_score {
+                best_score = overlap;
+                best_idx = Some(i);
+            }
+        }
+        if best_score >= 0.5 {
+            best_idx
+        } else {
+            None
+        }
+    }
+
+    pub fn absorb(&mut self, input: &str, response: &str, source_weight: f64) {
+        if input.is_empty() || response.is_empty() {
+            return;
+        }
+        if self.is_fallback_response(response) {
+            return;
+        }
+        self.absorb_internal(input, response, source_weight);
+        self.resolve_misses_for(input, response);
+    }
+
+    fn absorb_internal(&mut self, input: &str, response: &str, weight: f64) {
+        let tokens = self.tokenize(input);
+        if tokens.is_empty() || response.is_empty() {
+            return;
+        }
+        for p in &mut self.patterns {
+            let common = p.tokens.iter().filter(|t| tokens.contains(t)).count();
+            let denom = p.tokens.len().max(tokens.len());
+            if denom > 0 && (common as f64 / denom as f64) >= ABSORB_MERGE_THRESHOLD {
+                let sim = Self::norm_similarity(&p.response, response);
+                if sim > 0.8 {
+                    p.weight = (p.weight + weight * 0.3).min(10.0);
+                    p.frequency += 1;
+                    p.last_used = self.tick;
+                    return;
+                }
+                if sim < 0.3 && response.len() > p.response.len() {
+                    p.response = response.to_string();
+                    p.weight = (p.weight + weight * 0.5).min(10.0);
+                    p.last_used = self.tick;
+                    return;
+                }
+            }
+        }
+        self.add_pattern(tokens, response.to_string(), weight);
+        self.absorbed_count += 1;
+    }
+
+    fn record_miss(&mut self, input: &str, tokens: &[String]) {
+        for (existing_tokens, _) in &self.miss_buffer {
+            if existing_tokens == tokens {
+                return;
+            }
+        }
+        if self.miss_buffer.len() >= MISS_BUFFER_MAX {
+            self.miss_buffer.remove(0);
+        }
+        self.miss_buffer.push((tokens.to_vec(), input.to_string()));
+    }
+
+    fn resolve_misses_for(&mut self, input: &str, response: &str) {
+        let input_tokens = self.tokenize(input);
+        if input_tokens.is_empty() {
+            return;
+        }
+        let mut resolved_indices = Vec::new();
+        for (i, (miss_tokens, _)) in self.miss_buffer.iter().enumerate() {
+            let common = miss_tokens.iter().filter(|t| input_tokens.contains(t)).count();
+            let denom = miss_tokens.len().max(input_tokens.len());
+            if denom > 0 && (common as f64 / denom as f64) >= 0.7 {
+                resolved_indices.push(i);
+            }
+        }
+        for i in resolved_indices.into_iter().rev() {
+            let (miss_tokens, _) = self.miss_buffer.remove(i);
+            let already_exists = self.patterns.iter().any(|p| {
+                let c = p.tokens.iter().filter(|t| miss_tokens.contains(t)).count();
+                let d = p.tokens.len().max(miss_tokens.len());
+                d > 0 && (c as f64 / d as f64) >= ABSORB_MERGE_THRESHOLD
+            });
+            if !already_exists {
+                self.add_pattern(miss_tokens, response.to_string(), ABSORB_WEIGHT * 0.8);
+                self.absorbed_count += 1;
+            }
+        }
+    }
+
+    pub fn decay_stale(&mut self) {
+        if self.tick < STALE_TICK_THRESHOLD {
+            return;
+        }
+        let threshold = self.tick - STALE_TICK_THRESHOLD;
+        for p in &mut self.patterns {
+            if p.last_used < threshold && p.weight > 0.3 {
+                p.weight *= STALE_DECAY_FACTOR;
+            }
+        }
+    }
+
+    pub fn feedback_correction(&mut self, input: &str, correct_response: &str) {
+        if input.is_empty() || correct_response.is_empty() {
+            return;
+        }
+        self.penalize(input);
+        self.teach(input, correct_response);
+        self.log_feedback(input, correct_response, 0, correct_response.to_string(), "correction");
+    }
+
+    fn log_feedback(&mut self, input: &str, response: &str, signal: i8, correction: String, source: &str) {
+        if self.feedback_log.len() >= FEEDBACK_LOG_MAX {
+            self.feedback_log.remove(0);
+        }
+        self.feedback_log.push(FeedbackRecord {
+            input_trunc: input.chars().take(80).collect(),
+            response_trunc: response.chars().take(80).collect(),
+            signal,
+            correction,
+            timestamp: self.tick,
+            source: source.to_string(),
+        });
+    }
+
+    pub fn export_feedback_jsonl(&self) -> String {
+        let mut out = String::new();
+        for rec in &self.feedback_log {
+            if let Ok(json) = serde_json::to_string(rec) {
+                out.push_str(&json);
+                out.push('\n');
+            }
+        }
+        for (tokens, raw_input) in &self.miss_buffer {
+            let miss = serde_json::json!({
+                "type": "miss",
+                "input": raw_input,
+                "token_count": tokens.len(),
+            });
+            if let Ok(json) = serde_json::to_string(&miss) {
+                out.push_str(&json);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    pub fn feedback_stats(&self) -> (usize, usize, usize, usize) {
+        let positive = self.feedback_log.iter().filter(|r| r.signal > 0).count();
+        let negative = self.feedback_log.iter().filter(|r| r.signal < 0).count();
+        (self.miss_buffer.len(), self.feedback_log.len(), self.absorbed_count, positive.saturating_sub(negative))
+    }
+
+    pub fn pending_misses(&self, limit: usize) -> Vec<String> {
+        self.miss_buffer.iter()
+            .rev()
+            .take(limit)
+            .map(|(_, raw_input)| raw_input.clone())
+            .collect()
+    }
+
+    pub fn miss_token_clusters(&self, min_freq: usize) -> Vec<(String, usize, Vec<String>)> {
+        let stop: std::collections::HashSet<&str> = [
+            "的","了","是","在","和","有","不","这","个","我","你","他","它","她",
+            "吗","呢","吧","啊","把","被","用","对","与","从","到","让","给",
+            "什么","怎么","如何","为什么","可以","能","要","会","就","也","都",
+            "一个","一种","需要","进行","通过","使用","关于","哪些","那些",
+        ].iter().copied().collect();
+        let mut freq: std::collections::HashMap<String, (usize, Vec<usize>)> =
+            std::collections::HashMap::new();
+        for (i, (tokens, _)) in self.miss_buffer.iter().enumerate() {
+            for t in tokens {
+                if t.chars().count() < 2 || stop.contains(t.as_str()) {
+                    continue;
+                }
+                let entry = freq.entry(t.clone()).or_insert((0, Vec::new()));
+                entry.0 += 1;
+                if !entry.1.contains(&i) {
+                    entry.1.push(i);
+                }
+            }
+        }
+        let mut clusters: Vec<(String, usize, Vec<String>)> = Vec::new();
+        let mut used_miss: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut sorted: Vec<_> = freq.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        for (token, (count, miss_indices)) in sorted {
+            if count < min_freq { break; }
+            let new_indices: Vec<usize> = miss_indices.iter()
+                .filter(|i| !used_miss.contains(i))
+                .copied()
+                .collect();
+            if new_indices.len() < min_freq { continue; }
+            let sample_inputs: Vec<String> = new_indices.iter()
+                .take(5)
+                .filter_map(|&i| self.miss_buffer.get(i).map(|(_, raw)| raw.clone()))
+                .collect();
+            for &i in &new_indices {
+                used_miss.insert(i);
+            }
+            clusters.push((token, count, sample_inputs));
+        }
+        clusters
+    }
+
+    pub fn top_quality_pairs(&self, limit: usize) -> Vec<(String, String)> {
+        let mut scored: Vec<(f64, usize)> = self.patterns.iter().enumerate()
+            .filter(|(_, p)| p.response.len() > 10 && p.tokens.len() >= 2)
+            .map(|(i, p)| (p.weight * (p.frequency as f64).sqrt(), i))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.iter().take(limit).filter_map(|(_, idx)| {
+            let p = &self.patterns[*idx];
+            let human = p.tokens.join("");
+            if human.len() < 4 { return None; }
+            Some((human, p.response.clone()))
+        }).collect()
     }
 
     pub fn teach(&mut self, trigger: &str, response: &str) {
@@ -584,6 +944,10 @@ impl LanguagePouch {
         self.context.push((input, response));
     }
 
+    pub fn last_context_input(&self) -> Option<&str> {
+        self.context.last().map(|(input, _)| input.as_str())
+    }
+
     pub fn receive_sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
         for (tokens, content, _) in patterns {
             if tokens.is_empty() || content.is_empty() {
@@ -608,7 +972,7 @@ impl LanguagePouch {
                 continue;
             }
             let sim = common as f64 / denom;
-            if sim >= SYNC_MATCH_THRESHOLD && best.as_ref().map_or(true, |(s, _)| sim > *s) {
+            if sim >= SYNC_MATCH_THRESHOLD && best.as_ref().is_none_or(|(s, _)| sim > *s) {
                 best = Some((sim, scontent.clone()));
             }
         }
@@ -641,6 +1005,10 @@ impl LanguagePouch {
 
     pub fn last_was_pattern_hit(&self) -> bool {
         self.last_was_pattern_hit
+    }
+
+    pub fn last_match_weight(&self) -> f64 {
+        self.last_match_weight
     }
 
     pub fn context_len(&self) -> usize {
@@ -676,24 +1044,6 @@ impl LanguagePouch {
                 2 => "这句我还对不上。试试「自我优化」让我多装几个尿袋，或直接教我一句？".into(),
                 _ => format!("目前没匹配到。已学 {} 条，多教几句会好很多。", pattern_count),
             }
-        }
-    }
-
-    fn learn_from_input(&mut self, tokens: &[String], _response: &str) {
-        if tokens.len() < 2 {
-            return;
-        }
-        for p in &self.patterns {
-            if p.tokens == tokens {
-                return;
-            }
-        }
-        let overlap: Vec<&Pattern> = self.patterns.iter().filter(|p| {
-            let common = p.tokens.iter().filter(|t| tokens.contains(t)).count();
-            common > 0 && common >= p.tokens.len() / 2
-        }).collect();
-        if !overlap.is_empty() {
-            return;
         }
     }
 
@@ -740,8 +1090,9 @@ mod tests {
     #[test]
     fn test_tokenize() {
         let lp = LanguagePouch::new();
-        assert!(!lp.tokenize("你好世界").is_empty());
-        assert!(!lp.tokenize("hello world").is_empty());
+        let tokens = lp.tokenize("你好世界");
+        assert!(tokens.len() > 4);
+        assert!(tokens.contains(&"你好".to_string()));
     }
 
     #[test]
@@ -786,5 +1137,92 @@ mod tests {
         let req = lp.identify_requirement("分析代码问题");
         assert!(req.is_some());
         assert_eq!(req.as_ref().map(|r| r.capability_needed.as_str()), Some("code_analyzer"));
+    }
+
+    #[test]
+    fn test_absorb_creates_pattern() {
+        let mut lp = LanguagePouch::new();
+        let before = lp.memory_count();
+        lp.absorb("量子纠缠是什么现象", "量子纠缠是两个粒子之间的非局域关联", 1.2);
+        assert!(lp.memory_count() > before);
+    }
+
+    #[test]
+    fn test_absorb_merge_duplicate() {
+        let mut lp = LanguagePouch::new();
+        lp.absorb("量子纠缠原理", "量子纠缠是非局域关联", 1.2);
+        let count_after_first = lp.memory_count();
+        lp.absorb("量子纠缠原理", "量子纠缠是非局域关联", 1.2);
+        assert_eq!(lp.memory_count(), count_after_first);
+    }
+
+    #[test]
+    fn test_reinforce_and_penalize() {
+        let mut lp = LanguagePouch::new();
+        lp.teach("特殊测试输入语句", "特殊回复");
+        let before = lp.patterns.iter().find(|p| p.response == "特殊回复").map(|p| p.weight).unwrap_or(0.0);
+        lp.reinforce("特殊测试输入语句");
+        let after = lp.patterns.iter().find(|p| p.response == "特殊回复").map(|p| p.weight).unwrap_or(0.0);
+        assert!(after > before);
+        lp.penalize("特殊测试输入语句");
+        let after_penalize = lp.patterns.iter().find(|p| p.response == "特殊回复").map(|p| p.weight).unwrap_or(0.0);
+        assert!(after_penalize < after);
+    }
+
+    #[tokio::test]
+    async fn test_miss_buffer_records() {
+        let mut lp = LanguagePouch::new();
+        let _ = lp.process("一个完全不可能匹配的输入内容啊啊啊").await;
+        assert!(!lp.miss_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sync_promote_on_hit() {
+        let mut lp = LanguagePouch::new();
+        let tokens = lp.tokenize("分析一下这个化学分子的结构");
+        lp.receive_sync_patterns(&[(tokens, "分子分析结果：H2O 水分子".to_string(), 1.0)]);
+        let before = lp.memory_count();
+        let _ = lp.process("分析一下这个化学分子的结构").await;
+        assert!(lp.memory_count() > before);
+    }
+
+    #[test]
+    fn test_feedback_stats() {
+        let mut lp = LanguagePouch::new();
+        lp.teach("反馈测试输入", "反馈测试回复");
+        lp.reinforce("反馈测试输入");
+        let (_, log_count, _, _) = lp.feedback_stats();
+        assert!(log_count > 0);
+    }
+
+    #[test]
+    fn test_export_feedback_jsonl() {
+        let mut lp = LanguagePouch::new();
+        lp.teach("导出测试输入", "导出测试回复");
+        lp.reinforce("导出测试输入");
+        let jsonl = lp.export_feedback_jsonl();
+        assert!(!jsonl.is_empty());
+    }
+
+    #[test]
+    fn test_feedback_save_load_roundtrip() {
+        let mut lp = LanguagePouch::new();
+        lp.teach("持久化测试输入", "持久化测试回复");
+        lp.reinforce("持久化测试输入");
+        lp.miss_buffer.push((vec!["test".into()], "test_input".into()));
+        let data = lp.save_feedback().expect("save");
+        let mut lp2 = LanguagePouch::new();
+        lp2.load_feedback(&data).expect("load");
+        assert_eq!(lp2.feedback_log.len(), lp.feedback_log.len());
+        assert_eq!(lp2.miss_buffer.len(), lp.miss_buffer.len());
+    }
+
+    #[test]
+    fn test_is_fallback_response_extended() {
+        let lp = LanguagePouch::new();
+        assert!(lp.is_fallback_response("这句我还不会答。"));
+        assert!(lp.is_fallback_response("还没学过"));
+        assert!(lp.is_fallback_response("没匹配到"));
+        assert!(!lp.is_fallback_response("量子纠缠是一种物理现象"));
     }
 }

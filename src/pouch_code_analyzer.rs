@@ -1,9 +1,11 @@
+use crate::atom::{AtomDeclaration, AtomKind};
 use crate::pouch_trait::{Pouch, PouchRole, PouchOutput, ProposalValidator, ValidatedProposal};
 use async_trait::async_trait;
 
 pub struct CodeAnalyzerPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl CodeAnalyzerPouch {
@@ -15,6 +17,7 @@ impl CodeAnalyzerPouch {
                 min_confidence: 0.0,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -43,9 +46,40 @@ impl Pouch for CodeAnalyzerPouch {
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        let result = self.analyze_code(&proposal.inner().content);
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 {
+                return Ok(PouchOutput { data: response.clone(), confidence: 0.82 });
+            }
+        }
+        let result = self.analyze_code(input);
         Ok(PouchOutput { data: result, confidence: 0.85 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "CodeAnalyzerPouch: 代码分析尿袋".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("代码") || content.contains("fn ")
+                    || content.contains("分析") || content.contains("函数")
+                    || content.contains("复杂度") || content.contains("bug")
+                    || content.contains("程序") || content.contains("调试")
+                    || content.contains("错误") || content.contains("优化");
+                if (dominated || *weight >= 1.2) && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String { format!("CodeAnalyzerPouch: 代码分析，已学{}条", self.learned.len()) }
+    fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
+        vec![AtomDeclaration {
+            name: "code_analyze".into(),
+            kind: AtomKind::Validate,
+            pouch: self.name.clone(),
+            confidence_range: (0.7, 0.9),
+        }]
+    }
 }

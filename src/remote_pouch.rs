@@ -9,6 +9,7 @@ pub struct RemotePouch {
     pub endpoint: String,
     pub failover_endpoints: Vec<String>,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl RemotePouch {
@@ -23,6 +24,7 @@ impl RemotePouch {
                 min_confidence: 0.1,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -85,13 +87,29 @@ impl Pouch for RemotePouch {
     fn role(&self) -> PouchRole { self.role }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        let result = self.call_with_failover(&proposal.inner().content).await;
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.82 }); }
+        }
+        let result = self.call_with_failover(input).await;
         Ok(PouchOutput { data: result, confidence: 0.8 })
     }
-    fn memory_count(&self) -> usize { 0 }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 1.0 && tokens.len() >= 2 && content.len() >= 10
+                && !self.learned.iter().any(|(t, _)| t == tokens)
+            {
+                self.learned.push((tokens.clone(), content.clone()));
+                if self.learned.len() > 200 { self.learned.remove(0); }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
     fn explain(&self) -> String {
         let fo = if self.failover_endpoints.is_empty() { "" } else { " +failover" };
-        format!("RemotePouch[{}]: 远程计算尿袋{}", self.name, fo)
+        format!("RemotePouch[{}]: 远程计算尿袋{}，学习{}条", self.name, fo, self.learned.len())
     }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         let n = self.name.as_str();

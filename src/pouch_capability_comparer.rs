@@ -5,6 +5,7 @@ use async_trait::async_trait;
 pub struct CapabilityComparerPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl CapabilityComparerPouch {
@@ -16,6 +17,7 @@ impl CapabilityComparerPouch {
                 min_confidence: 0.0,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -143,10 +145,33 @@ impl Pouch for CapabilityComparerPouch {
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        Ok(PouchOutput { data: self.real_comparison(&proposal.inner().content), confidence: 0.95 })
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.85 }); }
+        }
+        Ok(PouchOutput { data: self.real_comparison(input), confidence: 0.95 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "CapabilityComparerPouch: 基于真实能力的对标对比".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("对比") || content.contains("能力")
+                    || content.contains("差距") || content.contains("评估")
+                    || content.contains("对标") || content.contains("compare")
+                    || content.contains("排名") || content.contains("竞品")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String {
+        format!("CapabilityComparerPouch: 能力对标，学习{}条", self.learned.len())
+    }
     fn evolution_gaps_from_output(&self, my_output: &str) -> Vec<(String, f64)> {
         self.parse_evolution_gaps(my_output)
     }

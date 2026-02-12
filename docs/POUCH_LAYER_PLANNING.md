@@ -28,6 +28,18 @@
 
 后续若在管理层显式落地（如 PouchMeta 标记、调度优先策略），均以此预设为线头。
 
+### 0.0.1 调度优先策略（已落地）
+
+`try_fallback_chain` 按 `PouchRole` 排序（E0 → E1 → E2），E2 袋仅在唤醒状态下参与，确保本地热路径上低熵袋先尝试。排序键由 `Orchestrator::role_priority(role) -> u8` 提供（E0=0, E1=1, E2=2），对应 `candidates.sort_by_key`。Language（E0）在 Reject 分支中已先于 fallback_chain 执行，形成 Language → E1 → E2 的完整优先级。
+
+### 0.0.2 参数自适应闭环（已落地）
+
+`maybe_adjust_baseline` 在 `record_evolution` 后触发，根据演化链成功率同时微调三个参数：`baseline_score`（步长 0.02）、`low_score_threshold`（步长 0.01）和 `promote_min_chain_score`（步长 0.005），均经 `RoutingParamsBounds` clamp 后写回 `pouch_config.json`。成功率 > 0.5 时参数增长（筛选更严），< 0.5 时降低（放宽选择），三参数联动趋近「高命中、低冗余、晋升门槛自适应」最佳状态。
+
+### 0.0.3 atom_capabilities 与实质能力一致性（已落地）
+
+各 pouch 的 `atom_capabilities()` 返回的 `AtomDeclaration`（name, kind, confidence_range）与 `process_proposal` 实际能力对齐：ContextAwarePouch 声明 `term_disambiguate`（Transform）+ `context_analyze`（Match）；MemoryPouch 声明 `memory_query`（Match）反映其 process_proposal 仅查询的实际行为；RemotePouch 的 `code_analyzer` 使用 Validate（与本地 CodeAnalyzerPouch 一致），`chemistry` 包含 `material_create`（Generate，与本地 ChemistryPouch 一致）。
+
 ---
 
 ## 0.1 尿袋管理器净化（仅机制、仅协调）

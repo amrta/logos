@@ -9,6 +9,7 @@ use async_trait::async_trait;
 pub struct PilotPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl PilotPouch {
@@ -20,6 +21,7 @@ impl PilotPouch {
                 min_confidence: 0.0,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 }
@@ -37,6 +39,11 @@ impl Pouch for PilotPouch {
     }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
         let s = proposal.inner().content.as_str();
+        let lower = s.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.82 }); }
+        }
         let out = if s.is_empty() {
             "Pilot: 无输入".to_string()
         } else {
@@ -47,11 +54,25 @@ impl Pouch for PilotPouch {
             confidence: 0.85,
         })
     }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("试点") || content.contains("验证")
+                    || content.contains("测试") || content.contains("路由")
+                    || content.contains("偏好") || content.contains("pilot")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
     fn memory_count(&self) -> usize {
-        0
+        self.learned.len()
     }
     fn explain(&self) -> String {
-        "PilotPouch: 试点迁移，最小可执行形态".into()
+        format!("PilotPouch: 试点验证，学习{}条", self.learned.len())
     }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![AtomDeclaration {

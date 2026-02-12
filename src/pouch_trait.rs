@@ -100,6 +100,7 @@ pub struct MaterialPouch {
     name: String,
     validator: ProposalValidator,
     elements: Vec<String>,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl MaterialPouch {
@@ -112,10 +113,16 @@ impl MaterialPouch {
                 min_evidence_count: 0,
             },
             elements: vec!["Fe".into(), "C".into(), "Al".into(), "Cu".into(), "Si".into()],
+            learned: Vec::new(),
         }
     }
 
     fn analyze(&self, input: &str) -> String {
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return response.clone(); }
+        }
         let mut found = Vec::new();
         for elem in &self.elements {
             if input.contains(elem.as_str()) {
@@ -139,9 +146,24 @@ impl Pouch for MaterialPouch {
         let analysis = self.analyze(&proposal.inner().content);
         Ok(PouchOutput { data: analysis, confidence: 0.85 })
     }
-    fn memory_count(&self) -> usize { 0 }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let relevant = content.contains("材料") || content.contains("元素")
+                    || content.contains("合金") || content.contains("化学")
+                    || content.contains("分子") || content.contains("金属")
+                    || content.contains("聚合") || content.contains("晶体")
+                    || *weight >= 1.2;
+                if relevant && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
     fn explain(&self) -> String {
-        format!("MaterialPouch: 材料分析尿袋，支持{}种元素", self.elements.len())
+        format!("MaterialPouch: 材料分析，元素{}种+学习{}条", self.elements.len(), self.learned.len())
     }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![AtomDeclaration {
@@ -156,6 +178,7 @@ impl Pouch for MaterialPouch {
 pub struct PrinterPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl PrinterPouch {
@@ -167,6 +190,7 @@ impl PrinterPouch {
                 min_confidence: 0.3,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -188,11 +212,34 @@ impl Pouch for PrinterPouch {
     fn role(&self) -> PouchRole { PouchRole::E2 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        let gcode = self.generate_gcode(&proposal.inner().content);
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.82 }); }
+        }
+        let gcode = self.generate_gcode(input);
         Ok(PouchOutput { data: gcode, confidence: 0.9 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "PrinterPouch: 3D打印G-Code生成尿袋".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("打印") || content.contains("G-Code")
+                    || content.contains("3D") || content.contains("材料")
+                    || content.contains("制造") || content.contains("切片")
+                    || content.contains("喷嘴") || content.contains("层高")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String {
+        format!("PrinterPouch: 3D打印G-Code生成，学习{}条", self.learned.len())
+    }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![AtomDeclaration {
             name: "gcode_generate".into(),
@@ -215,6 +262,7 @@ pub fn create_proposal(content: &str) -> ProposalMessage {
 pub struct ReasoningPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl ReasoningPouch {
@@ -226,7 +274,21 @@ impl ReasoningPouch {
                 min_confidence: 0.2,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
+    }
+
+    fn lookup_learned(&self, input: &str) -> Option<&str> {
+        let lower = input.to_lowercase();
+        let input_tokens: Vec<&str> = lower.split_whitespace().collect();
+        let mut best: Option<(usize, &str)> = None;
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| input_tokens.iter().any(|it| it.contains(t.as_str()) || t.contains(it))).count();
+            if hits > 0 && best.is_none_or(|(b, _)| hits > b) {
+                best = Some((hits, response.as_str()));
+            }
+        }
+        best.and_then(|(h, r)| if h >= 2 { Some(r) } else { None })
     }
 
     fn process_reasoning(&self, input: &str) -> String {
@@ -298,11 +360,30 @@ impl Pouch for ReasoningPouch {
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        let result = self.process_reasoning(&proposal.inner().content);
+        let input = &proposal.inner().content;
+        if let Some(learned_response) = self.lookup_learned(input) {
+            return Ok(PouchOutput { data: learned_response.to_string(), confidence: 0.8 });
+        }
+        let result = self.process_reasoning(input);
         Ok(PouchOutput { data: result, confidence: 0.7 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "ReasoningPouch: 推理尿袋，处理逻辑推理、数学计算、比较分析".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && !content.is_empty() && tokens.len() >= 2 {
+                let dominated = content.contains("推理") || content.contains("逻辑")
+                    || content.contains("如果") || content.contains("因为")
+                    || content.contains("所以") || content.contains("分析")
+                    || content.contains("原因") || content.contains("结论")
+                    || content.contains("判断") || content.contains("比较");
+                if (dominated || *weight >= 1.2) && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String { format!("ReasoningPouch: 推理尿袋，已学{}条模式", self.learned.len()) }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![
             AtomDeclaration {
@@ -440,10 +521,10 @@ impl Pouch for MemoryPouch {
     }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![AtomDeclaration {
-            name: "memory_store".into(),
-            kind: AtomKind::Transform,
+            name: "memory_query".into(),
+            kind: AtomKind::Match,
             pouch: self.name.clone(),
-            confidence_range: (0.8, 0.95),
+            confidence_range: (0.5, 0.8),
         }]
     }
 }
@@ -451,6 +532,7 @@ impl Pouch for MemoryPouch {
 pub struct CreativePouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl CreativePouch {
@@ -462,6 +544,20 @@ impl CreativePouch {
                 min_confidence: 0.2,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
+        }
+    }
+
+    fn creative_generate(&self, input: &str) -> String {
+        let lower = input.to_lowercase();
+        if lower.contains("诗") || lower.contains("词") {
+            format!("「{}」\n——灵感来自输入关键意象，韵律待打磨", input.chars().take(20).collect::<String>())
+        } else if lower.contains("故事") || lower.contains("小说") {
+            format!("故事梗概：围绕「{}」展开，起承转合四段结构", input.chars().take(20).collect::<String>())
+        } else if lower.contains("创意") || lower.contains("方案") {
+            format!("创意方案：基于「{}」的多维度发散思路", input.chars().take(20).collect::<String>())
+        } else {
+            format!("CreativePouch 已处理: {} ({} 字)", input.chars().take(30).collect::<String>(), input.chars().count())
         }
     }
 }
@@ -471,11 +567,43 @@ impl Pouch for CreativePouch {
     fn name(&self) -> &str { &self.name }
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
-    async fn process_proposal(&mut self, _proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        Err("E2尿袋需安装具体实现".to_string())
+    async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.82 }); }
+        }
+        let result = self.creative_generate(input);
+        Ok(PouchOutput { data: result, confidence: 0.75 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { format!("CreativePouch: 创造尿袋 {}", self.name) }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("创意") || content.contains("创造")
+                    || content.contains("写作") || content.contains("生成")
+                    || content.contains("故事") || content.contains("诗")
+                    || content.contains("想象") || content.contains("灵感")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String {
+        format!("CreativePouch: 创意生成，学习{}条", self.learned.len())
+    }
+    fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
+        vec![AtomDeclaration {
+            name: "creative_generate".into(),
+            kind: AtomKind::Generate,
+            pouch: self.name.clone(),
+            confidence_range: (0.5, 0.85),
+        }]
+    }
 }
 
 pub struct CloudTrainerPouch {
@@ -563,11 +691,32 @@ impl Pouch for CloudTrainerPouch {
             self.pending_data.len(),
             if self.trained { "已完成" } else { "待执行" })
     }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 1.0 && tokens.len() >= 2 && content.len() >= 10 {
+                let key = tokens.join("|");
+                let val = content.clone();
+                if !self.pending_data.iter().any(|(k, _)| k == &key) {
+                    self.pending_data.push((key, val));
+                    if self.pending_data.len() > 500 { self.pending_data.remove(0); }
+                }
+            }
+        }
+    }
+    fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
+        vec![AtomDeclaration {
+            name: "cloud_train".into(),
+            kind: AtomKind::Transform,
+            pouch: self.name.clone(),
+            confidence_range: (0.5, 0.95),
+        }]
+    }
 }
 
 pub struct DiscoveryPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl DiscoveryPouch {
@@ -579,6 +728,7 @@ impl DiscoveryPouch {
                 min_confidence: 0.1,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -603,12 +753,35 @@ impl Pouch for DiscoveryPouch {
     fn name(&self) -> &str { &self.name }
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
-    async fn process_proposal(&mut self, _proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
+    async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.82 }); }
+        }
         let result = self.discover_services().await;
         Ok(PouchOutput { data: result, confidence: 0.9 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "DiscoveryPouch: 扫描互联网可用的容灾服务供配置".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("服务") || content.contains("API")
+                    || content.contains("端点") || content.contains("接口")
+                    || content.contains("发现") || content.contains("扫描")
+                    || content.contains("容灾") || content.contains("集群")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String {
+        format!("DiscoveryPouch: 服务发现+容灾扫描，学习{}条", self.learned.len())
+    }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
         vec![AtomDeclaration {
             name: "service_scan".into(),
@@ -683,17 +856,45 @@ impl Pouch for ContextAwarePouch {
         };
         Ok(PouchOutput { data: result, confidence: 0.85 })
     }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                for token in tokens {
+                    if token.chars().count() >= 2 && !self.terminology.contains_key(token) {
+                        let domain = if content.contains("代码") || content.contains("程序") { "技术" }
+                            else if content.contains("推理") || content.contains("逻辑") { "逻辑" }
+                            else { "通用" };
+                        let mut trunc_end = content.len().min(60);
+                        while !content.is_char_boundary(trunc_end) && trunc_end > 0 { trunc_end -= 1; }
+                        self.terminology.insert(
+                            token.clone(),
+                            (content[..trunc_end].to_string(), domain.to_string(), Vec::new()),
+                        );
+                        if self.terminology.len() > 300 { break; }
+                    }
+                }
+            }
+        }
+    }
     fn memory_count(&self) -> usize { self.terminology.len() }
     fn explain(&self) -> String {
         format!("ContextAwarePouch: 术语消歧义，已加载 {} 术语", self.terminology.len())
     }
     fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
-        vec![AtomDeclaration {
-            name: "term_disambiguate".into(),
-            kind: AtomKind::Transform,
-            pouch: self.name.clone(),
-            confidence_range: (0.7, 0.9),
-        }]
+        vec![
+            AtomDeclaration {
+                name: "term_disambiguate".into(),
+                kind: AtomKind::Transform,
+                pouch: self.name.clone(),
+                confidence_range: (0.7, 0.9),
+            },
+            AtomDeclaration {
+                name: "context_analyze".into(),
+                kind: AtomKind::Match,
+                pouch: self.name.clone(),
+                confidence_range: (0.7, 0.9),
+            },
+        ]
     }
 }
 

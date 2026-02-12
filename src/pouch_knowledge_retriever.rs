@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::atom::{AtomDeclaration, AtomKind};
 use crate::pouch_trait::{Pouch, PouchRole, PouchOutput, ProposalValidator, ValidatedProposal};
 use async_trait::async_trait;
 
@@ -45,6 +46,25 @@ impl Pouch for KnowledgeRetrieverPouch {
         let result = self.search(&proposal.inner().content);
         Ok(PouchOutput { data: result, confidence: 0.85 })
     }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && !content.is_empty() && self.knowledge_base.len() < 500 {
+                for token in tokens {
+                    if token.chars().count() >= 2 && !self.knowledge_base.contains_key(token) {
+                        self.knowledge_base.insert(token.clone(), content.clone());
+                    }
+                }
+            }
+        }
+    }
     fn memory_count(&self) -> usize { self.knowledge_base.len() }
-    fn explain(&self) -> String { "KnowledgeRetrieverPouch: 知识检索尿袋".into() }
+    fn explain(&self) -> String { format!("KnowledgeRetrieverPouch: 知识检索，{}条", self.knowledge_base.len()) }
+    fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
+        vec![AtomDeclaration {
+            name: "knowledge_retrieve".into(),
+            kind: AtomKind::Match,
+            pouch: self.name.clone(),
+            confidence_range: (0.6, 0.9),
+        }]
+    }
 }

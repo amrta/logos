@@ -179,6 +179,19 @@ async fn main() {
         }
     });
 
+    let app_learn = app.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(90));
+        loop {
+            interval.tick().await;
+            let mut orch = app_learn.orch.lock().await;
+            if orch.is_ready() {
+                orch.autonomous_learning_cycle().await;
+            }
+        }
+    });
+
     let router = Router::new()
         .route("/", get(ui))
         .route("/docs/:name", get(serve_doc))
@@ -189,6 +202,12 @@ async fn main() {
         .route("/api/capabilities", get(capabilities))
         .route("/api/architecture", get(architecture))
         .route("/api/data_size", get(data_size))
+        .route("/api/feedback", post(feedback))
+        .route("/api/feedback_status", get(feedback_status_handler))
+        .route("/api/language_debug", post(language_debug))
+        .route("/api/batch_teach", post(batch_teach))
+        .route("/api/seed_routes", post(seed_routes))
+        .route("/api/dashboard", get(dashboard))
         .with_state(app);
 
     let addr = "127.0.0.1:3000";
@@ -338,6 +357,104 @@ async fn architecture(State(app): State<Arc<App>>) -> Json<ArchitectureRes> {
     })
 }
 
+#[derive(Deserialize)]
+struct FeedbackReq {
+    input: String,
+    signal: i8,
+    correction: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FeedbackRes {
+    status: String,
+    message: String,
+}
+
+async fn feedback(State(app): State<Arc<App>>, Json(req): Json<FeedbackReq>) -> Json<FeedbackRes> {
+    let mut orch = app.orch.lock().await;
+    orch.apply_feedback(&req.input, req.signal, req.correction.as_deref());
+    Json(FeedbackRes {
+        status: "ok".into(),
+        message: format!("signal={} applied", req.signal),
+    })
+}
+
+async fn feedback_status_handler(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let orch = app.orch.lock().await;
+    let (misses, log_count, absorbed, net_positive) = orch.language_feedback_stats();
+    serde_json::json!({
+        "misses": misses,
+        "feedback_log": log_count,
+        "absorbed": absorbed,
+        "net_positive": net_positive,
+        "memory_count": orch.total_memory_count(),
+    }).into()
+}
+
+#[derive(Deserialize)]
+struct LanguageDebugReq {
+    input: String,
+}
+
+#[derive(Serialize)]
+struct LanguageDebugRes {
+    response: String,
+    status: String,
+    is_fallback: bool,
+    last_match_weight: f64,
+}
+
+async fn language_debug(State(app): State<Arc<App>>, Json(req): Json<LanguageDebugReq>) -> Json<LanguageDebugRes> {
+    let mut orch = app.orch.lock().await;
+    let input = if req.input.len() > frozen::bedrock::MAX_INPUT_LEN {
+        let mut end = frozen::bedrock::MAX_INPUT_LEN;
+        while !req.input.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        &req.input[..end]
+    } else {
+        &req.input
+    };
+    let (response, is_fallback, last_match_weight) = orch.language_debug(input).await;
+    Json(LanguageDebugRes {
+        response,
+        status: "ok".into(),
+        is_fallback,
+        last_match_weight,
+    })
+}
+
+async fn seed_routes(State(app): State<Arc<App>>, body: String) -> Json<serde_json::Value> {
+    let mut orch = app.orch.lock().await;
+    let mut count = 0usize;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        if let Some((pouch, query)) = line.split_once('|') {
+            let pouch = pouch.trim();
+            let query = query.trim();
+            if !pouch.is_empty() && !query.is_empty() {
+                orch.seed_route(query, pouch);
+                count += 1;
+            }
+        }
+    }
+    Json(serde_json::json!({ "status": "ok", "seeded": count }))
+}
+
+async fn batch_teach(State(app): State<Arc<App>>, body: String) -> Json<serde_json::Value> {
+    let mut orch = app.orch.lock().await;
+    let before = orch.total_memory_count();
+    let taught = orch.batch_teach_content(&body);
+    let after = orch.total_memory_count();
+    Json(serde_json::json!({
+        "status": "ok",
+        "taught": taught,
+        "before": before,
+        "after": after
+    }))
+}
+
 fn file_size(path: &std::path::Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
@@ -371,4 +488,65 @@ async fn data_size(State(app): State<Arc<App>>) -> Json<DataSizeRes> {
         total_bytes,
         memory_count,
     })
+}
+
+async fn dashboard(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let mut m = app.monitor.lock().await;
+    let metrics = match m.check() {
+        resource_monitor::Status::Ok(m)
+        | resource_monitor::Status::Warn(m, _)
+        | resource_monitor::Status::Critical(m, _) => m,
+    };
+    drop(m);
+    let orch = app.orch.lock().await;
+    let pouches_data: Vec<serde_json::Value> = orch.pouches_detail()
+        .into_iter()
+        .map(|(name, role, memory, awake, _, atoms)| {
+            serde_json::json!({"name": name, "role": role, "memory": memory, "awake": awake, "atoms": atoms})
+        })
+        .collect();
+    let (evo_total, evo_promoted, evo_candidates, evo_l2) = orch.evolution_info();
+    let evo_records: Vec<serde_json::Value> = orch.evolution_records_snapshot()
+        .into_iter()
+        .take(12)
+        .map(|(pouch, vc, promoted, last)| {
+            serde_json::json!({"pouch": pouch, "v": vc, "p": promoted, "t": last})
+        })
+        .collect();
+    let events = orch.recent_events();
+    let fb = orch.language_feedback_stats();
+    let atoms = orch.capabilities_info();
+    let mut kinds: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for a in &atoms {
+        *kinds.entry(format!("{:?}", a.kind)).or_insert(0) += 1;
+    }
+    let (cfg_b, cfg_l, cfg_p) = orch.routing_config_snapshot();
+    let ls = orch.learning_snapshot();
+    Json(serde_json::json!({
+        "v": frozen::bedrock::VERSION,
+        "cpu": metrics.cpu,
+        "mem": metrics.mem_mb,
+        "temp": metrics.temp_est,
+        "ready": orch.is_ready(),
+        "pouches": pouches_data,
+        "evo": {"total": evo_total, "promoted": evo_promoted, "candidates": evo_candidates, "l2": evo_l2, "threshold": 100u32, "records": evo_records},
+        "events": events,
+        "fb": {"misses": fb.0, "log": fb.1, "absorbed": fb.2, "net": fb.3},
+        "memory": orch.total_memory_count(),
+        "atoms": {"total": atoms.len(), "kinds": kinds},
+        "cfg": {"baseline": cfg_b, "low": cfg_l, "promote": cfg_p},
+        "learn": {
+            "cycle": ls.cycle_count,
+            "phase": ls.phase,
+            "ext_fed": ls.external_fed,
+            "ext_absorbed": ls.external_absorbed,
+            "syn_fed": ls.cross_fed,
+            "syn_absorbed": ls.cross_absorbed,
+            "saturation": ls.saturation,
+            "last_ts": ls.last_cycle_ts,
+            "cloud_pulled": ls.cloud_pulled,
+            "cloud_pushed": ls.cloud_pushed,
+            "cloud_cursor": ls.cloud_sync_cursor
+        }
+    }))
 }

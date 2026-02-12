@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut fallback_inputs = HashSet::new();
     if let Ok(f) = File::open(&eval_path) {
-        for line in BufReader::new(f).lines().filter_map(|l| l.ok()) {
+        for line in BufReader::new(f).lines().map_while(Result::ok) {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut existing = HashSet::new();
     if let Ok(f) = File::open(&train_path) {
-        for line in BufReader::new(f).lines().filter_map(|l| l.ok()) {
+        for line in BufReader::new(f).lines().map_while(Result::ok) {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut added = Vec::new();
     let sharegpt_file = File::open(&sharegpt_path).map_err(|e| format!("open {}: {}", sharegpt_path, e))?;
-    for line in BufReader::new(sharegpt_file).lines().filter_map(|l| l.ok()) {
+    for line in BufReader::new(sharegpt_file).lines().map_while(Result::ok) {
         if added.len() >= max_add {
             break;
         }

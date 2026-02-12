@@ -1,11 +1,13 @@
 {
   "manager": [
     { "id": "schedule", "name": "调度", "detail": "call_pouch", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "call_pouch" }},
+    { "id": "schedule_priority", "name": "调度优先", "detail": "E0>E1>E2 fallback", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "role_priority" }},
     { "id": "coordinate", "name": "协调", "detail": "sync_patterns", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "sync_patterns" }},
     { "id": "purify", "name": "净化", "detail": "无直接职能", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "pouch_catalog::instantiate" }},
     { "id": "math", "name": "数学化", "detail": "clamp/score", "completion": 100, "check": { "type": "grep", "path": "src/manager_math.rs", "pattern": "clamp_routing_params" }},
+    { "id": "param_adaptive", "name": "参数自适应", "detail": "baseline+threshold+promote闭环", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "PROMOTE_STEP" }},
     { "id": "evolution_chain", "name": "演化链", "detail": "记成功/失败", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "evolution_chain.push" }},
-    { "id": "soft_isolation", "name": "软隔离", "detail": "有熵/无熵", "completion": 70, "check": null }
+    { "id": "soft_isolation", "name": "软隔离", "detail": "有熵/无熵 E2限流", "completion": 100, "check": { "type": "grep", "path": "src/orchestrator.rs", "pattern": "PouchRole::E2" }}
   ],
   "layer": [
     { "id": "language", "name": "Language", "detail": "sync_buffer", "completion": 100, "check": { "type": "grep", "path": "src/language_pouch.rs", "pattern": "receive_sync_patterns" }},
@@ -13,6 +15,7 @@
     { "id": "memory", "name": "Memory", "detail": "sync 存记忆", "completion": 100, "check": { "type": "grep", "path": "src/pouch_trait.rs", "pattern": "sync_patterns" }},
     { "id": "defect", "name": "DefectScanner", "detail": "recommended_follow_ups", "completion": 100, "check": { "type": "grep", "path": "src/pouch_defect_scanner.rs", "pattern": "recommended_follow_ups" }},
     { "id": "capability", "name": "CapabilityComparer", "detail": "evolution_gaps", "completion": 100, "check": { "type": "grep", "path": "src/pouch_capability_comparer.rs", "pattern": "evolution_gaps_from_output" }},
-    { "id": "pipeline", "name": "Pipeline", "detail": "/pipeline", "completion": 100, "check": { "type": "grep", "path": "worker.js", "pattern": "handlePipeline" }}
+    { "id": "pipeline", "name": "Pipeline", "detail": "/pipeline", "completion": 100, "check": { "type": "grep", "path": "worker.js", "pattern": "handlePipeline" }},
+    { "id": "atom_caps", "name": "atom_capabilities一致", "detail": "各pouch声明与实现对齐", "completion": 100, "check": { "type": "grep", "path": "src/pouch_trait.rs", "pattern": "context_analyze" }}
   ]
 }

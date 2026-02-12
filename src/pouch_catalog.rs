@@ -13,8 +13,7 @@ pub fn instantiate(name: &str, data_dir: &str) -> Option<(Box<dyn Pouch>, PouchR
     }
 
     let cloud_pouches = [
-        "creative", "image_generator", "code_analyzer", "knowledge_retriever",
-        "discovery", "cloud_general",
+        "image_generator", "cloud_general",
     ];
     if cloud_pouches.contains(&name.as_str()) {
         let endpoint = format!("{}/pouch/{}", GATEWAY_BASE, name);

@@ -1,9 +1,11 @@
+use crate::atom::{AtomDeclaration, AtomKind};
 use crate::pouch_trait::{Pouch, PouchRole, PouchOutput, ProposalValidator, ValidatedProposal};
 use async_trait::async_trait;
 
 pub struct DefectScannerPouch {
     name: String,
     validator: ProposalValidator,
+    learned: Vec<(Vec<String>, String)>,
 }
 
 impl DefectScannerPouch {
@@ -15,6 +17,7 @@ impl DefectScannerPouch {
                 min_confidence: 0.0,
                 min_evidence_count: 0,
             },
+            learned: Vec::new(),
         }
     }
 
@@ -115,11 +118,42 @@ impl Pouch for DefectScannerPouch {
     fn role(&self) -> PouchRole { PouchRole::E1 }
     fn validator(&self) -> &ProposalValidator { &self.validator }
     async fn process_proposal(&mut self, proposal: &ValidatedProposal) -> Result<PouchOutput, String> {
-        Ok(PouchOutput { data: self.scan_real(&proposal.inner().content), confidence: 0.95 })
+        let input = &proposal.inner().content;
+        let lower = input.to_lowercase();
+        for (tokens, response) in &self.learned {
+            let hits = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
+            if hits >= 2 { return Ok(PouchOutput { data: response.clone(), confidence: 0.85 }); }
+        }
+        Ok(PouchOutput { data: self.scan_real(input), confidence: 0.95 })
     }
-    fn memory_count(&self) -> usize { 0 }
-    fn explain(&self) -> String { "DefectScannerPouch: 基于真实系统状态的缺陷扫描".into() }
+    fn sync_patterns(&mut self, patterns: &[(Vec<String>, String, f64)]) {
+        for (tokens, content, weight) in patterns {
+            if *weight >= 0.8 && tokens.len() >= 2 {
+                let dominated = content.contains("缺陷") || content.contains("扫描")
+                    || content.contains("问题") || content.contains("修复")
+                    || content.contains("诊断") || content.contains("异常")
+                    || content.contains("故障") || content.contains("检查")
+                    || *weight >= 1.2;
+                if dominated && !self.learned.iter().any(|(t, _)| t == tokens) {
+                    self.learned.push((tokens.clone(), content.clone()));
+                    if self.learned.len() > 200 { self.learned.remove(0); }
+                }
+            }
+        }
+    }
+    fn memory_count(&self) -> usize { self.learned.len() }
+    fn explain(&self) -> String {
+        format!("DefectScannerPouch: 缺陷扫描，学习{}条", self.learned.len())
+    }
     fn recommended_follow_ups(&self, my_output: &str) -> Vec<String> {
         DefectScannerPouch::recommended_follow_ups(self, my_output)
+    }
+    fn atom_capabilities(&self) -> Vec<AtomDeclaration> {
+        vec![AtomDeclaration {
+            name: "defect_scan".into(),
+            kind: AtomKind::Validate,
+            pouch: self.name.clone(),
+            confidence_range: (0.8, 0.95),
+        }]
     }
 }

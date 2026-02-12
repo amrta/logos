@@ -706,6 +706,9 @@ async function ensurePouchTables(env) {
     await env.DB.exec('CREATE TABLE IF NOT EXISTS evolution_history (id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT, source TEXT, target TEXT, data TEXT, success INTEGER, timestamp INTEGER)');
     await env.DB.exec('CREATE TABLE IF NOT EXISTS pouch_specs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, role TEXT DEFAULT \'E1\', endpoint TEXT NOT NULL, failover_endpoints TEXT DEFAULT \'[]\', created_at INTEGER)');
     await env.DB.exec('CREATE TABLE IF NOT EXISTS route_patterns (id INTEGER PRIMARY KEY AUTOINCREMENT, input_text TEXT NOT NULL, pouch_name TEXT NOT NULL, created_at INTEGER)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, input TEXT, signal INTEGER, correction TEXT, ts TEXT)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS harvest_state (source TEXT PRIMARY KEY, offset_val INTEGER DEFAULT 0, total_harvested INTEGER DEFAULT 0, last_run INTEGER, exhausted INTEGER DEFAULT 0)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS quota_log (date TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, subrequests INTEGER DEFAULT 0)');
     const count = await env.DB.prepare('SELECT COUNT(*) as c FROM pouch_specs').first();
     if (count && count.c === 0) {
       const base = 'https://logos-gateway.amrta.workers.dev';
@@ -849,6 +852,22 @@ export default {
         return await handleFeedLanguageUpload(request, corsHeaders, env);
       }
 
+      if (path === '/harvest' && (request.method === 'POST' || request.method === 'GET')) {
+        return await handleHarvest(env, corsHeaders);
+      }
+
+      if (path === '/quota' && request.method === 'GET') {
+        return await handleQuota(env, corsHeaders);
+      }
+
+      if (path === '/feedback' && request.method === 'POST') {
+        return await handleFeedback(request, corsHeaders, env);
+      }
+
+      if (path === '/feedback/status' && request.method === 'GET') {
+        return await handleFeedbackStatus(corsHeaders, env);
+      }
+
       if (path === '/test' && request.method === 'GET') {
         return await handleTest(request, env, corsHeaders);
       }
@@ -931,6 +950,45 @@ export default {
         const threshold = 0.85;
         const report = await mergeAndPurgeBySimilarity(env, threshold);
         return new Response(JSON.stringify({ ok: true, threshold, report }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      if ((path === '/sync' || path === '/internal/sync') && request.method === 'GET') {
+        const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+        if (!env.DB) return new Response(JSON.stringify({ error: 'No D1' }), { status: 503, headers: jsonHeaders });
+        try {
+          await ensurePouchTables(env);
+          const url = new URL(request.url);
+          const since = parseInt(url.searchParams.get('since') || '0', 10);
+          const limit = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 500);
+          const rows = await env.DB.prepare('SELECT id, human, gpt FROM language_pairs WHERE id > ? ORDER BY id LIMIT ?').bind(since, limit).all();
+          const pairs = (rows.results || []).map(r => ({ id: r.id, human: r.human, gpt: r.gpt }));
+          const maxId = pairs.length > 0 ? pairs[pairs.length - 1].id : since;
+          return new Response(JSON.stringify({ pairs, max_id: maxId, count: pairs.length }), { headers: jsonHeaders });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
+        }
+      }
+
+      if ((path === '/sync' || path === '/internal/sync') && request.method === 'POST') {
+        const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+        if (!env.DB) return new Response(JSON.stringify({ error: 'No D1' }), { status: 503, headers: jsonHeaders });
+        try {
+          await ensurePouchTables(env);
+          const body = await request.json();
+          const pairs = body.pairs || [];
+          let inserted = 0;
+          for (const p of pairs) {
+            if (!p.human || !p.gpt) continue;
+            const exists = await env.DB.prepare('SELECT id FROM language_pairs WHERE human = ? LIMIT 1').bind(String(p.human).trim()).first();
+            if (!exists) {
+              await env.DB.prepare('INSERT INTO language_pairs (human, gpt) VALUES (?, ?)').bind(String(p.human).trim(), String(p.gpt).trim()).run();
+              inserted++;
+            }
+          }
+          return new Response(JSON.stringify({ inserted, total: pairs.length }), { headers: jsonHeaders });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
+        }
       }
 
       if (path === '/status' && request.method === 'GET') {
@@ -1425,7 +1483,16 @@ export default {
   },
   async scheduled(controller, env, ctx) {
     const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    if (env.DB) {
+      const today = new Date().toISOString().slice(0, 10);
+      try {
+        await ensurePouchTables(env);
+        await env.DB.prepare('INSERT OR IGNORE INTO quota_log (date, requests, subrequests) VALUES (?, 0, 0)').bind(today).run();
+        await env.DB.prepare('UPDATE quota_log SET requests = requests + 1 WHERE date = ?').bind(today).run();
+      } catch (_) {}
+    }
     await handleAutoTrainStep(env, corsHeaders);
+    await handleHarvest(env, corsHeaders);
     await mergeAndPurgeBySimilarity(env, 0.85);
   }
 };
@@ -1631,7 +1698,21 @@ async function handleAutoTrainStep(env, corsHeaders) {
     }
     const now = String(Date.now());
     await env.DB.prepare("INSERT OR REPLACE INTO training_state (k, v) VALUES ('last_run', ?), ('last_count', ?)").bind(now, String(applied)).run();
-    return new Response(JSON.stringify({ applied, last_run: now }), { headers: jsonHeaders });
+
+    let learnResult = null;
+    const backend = env.LOGOS_BACKEND || '';
+    if (backend) {
+      try {
+        const lr = await fetch(backend + '/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: '自主学习' })
+        });
+        if (lr.ok) learnResult = await lr.json();
+      } catch (_) {}
+    }
+
+    return new Response(JSON.stringify({ applied, last_run: now, learn: learnResult }), { headers: jsonHeaders });
   } catch (e) {
     return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
   }
@@ -2245,6 +2326,83 @@ async function handleFeed(request, corsHeaders, env = {}) {
   });
 }
 
+async function handleFeedback(request, corsHeaders, env = {}) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+  const input = (body.input || '').trim();
+  const signal = typeof body.signal === 'number' ? body.signal : 0;
+  const correction = body.correction || null;
+  if (!input) {
+    return new Response(JSON.stringify({ error: 'Missing input field' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+  if (env.DB) {
+    try {
+      await ensurePouchTables(env);
+      await env.DB.prepare(
+        'INSERT INTO feedback (input, signal, correction, ts) VALUES (?, ?, ?, ?)'
+      ).bind(input.slice(0, 200), signal, correction ? correction.slice(0, 500) : null, new Date().toISOString()).run();
+      if (correction && correction.trim().length >= 4) {
+        const h = input.slice(0, 500).trim();
+        const g = correction.trim().slice(0, 3000);
+        if (h.length >= 5 && h.length <= 500) {
+          await env.DB.prepare('INSERT INTO language_pairs (human, gpt) VALUES (?, ?)').bind(h, g).run();
+        }
+      }
+    } catch (_) {}
+  }
+  const backend = (env.LOGOS_BACKEND || '').replace(/\/$/, '');
+  if (backend) {
+    try {
+      const payload = { input, signal };
+      if (correction) payload.correction = correction;
+      await fetch(`${backend}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (_) {}
+  }
+  return new Response(JSON.stringify({ status: 'ok', input: input.slice(0, 40), signal }), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+async function handleFeedbackStatus(corsHeaders, env = {}) {
+  const result = { feedback_count: 0, recent: [] };
+  if (env.DB) {
+    try {
+      const count = await env.DB.prepare('SELECT count(*) as n FROM feedback').first();
+      result.feedback_count = count ? count.n : 0;
+      const recent = await env.DB.prepare(
+        'SELECT input, signal, correction, ts FROM feedback ORDER BY rowid DESC LIMIT 20'
+      ).all();
+      result.recent = recent.results || [];
+    } catch (_) {}
+  }
+  const backend = (env.LOGOS_BACKEND || '').replace(/\/$/, '');
+  if (backend) {
+    try {
+      const r = await fetch(`${backend}/api/feedback_status`);
+      if (r.ok) {
+        result.backend = await r.json();
+      }
+    } catch (_) {}
+  }
+  return new Response(JSON.stringify(result), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
 async function handleAnalyze(request, corsHeaders) {
   let input = '';
   try {
@@ -2660,6 +2818,177 @@ async function handleVerifyStats(request, env, corsHeaders) {
     return new Response(JSON.stringify(out), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+}
+
+const HARVEST_SOURCES = [
+  { name: 'sharegpt_gpt4', type: 'hf', dataset: 'shibing624/sharegpt_gpt4', human_field: 'human', gpt_field: 'assistant', config: 'default', split: 'train', batch: 50 },
+  { name: 'belle_0.5m', type: 'hf', dataset: 'BelleGroup/train_0.5M_CN', human_field: 'instruction', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'alpaca_gpt4_zh', type: 'hf', dataset: 'shibing624/alpaca-zh', human_field: 'instruction', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'firefly_1m', type: 'hf', dataset: 'YeungNLP/firefly-train-1.1M', human_field: 'input', gpt_field: 'target', config: 'default', split: 'train', batch: 50 },
+  { name: 'moss_sft', type: 'hf', dataset: 'fnlp/moss-002-sft-data', human_field: 'plain_text', gpt_field: '', config: 'default', split: 'train', batch: 20 },
+  { name: 'stem_zh', type: 'hf', dataset: 'hfl/stem_zh_instruction', human_field: 'input', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'medical_zh', type: 'hf', dataset: 'shibing624/medical', human_field: 'instruction', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'wiki_zh', type: 'hf', dataset: 'pleisto/wikipedia-cn-20230720-filtered', human_field: 'title', gpt_field: 'text', config: 'default', split: 'train', batch: 30 },
+  { name: 'finance_zh', type: 'hf', dataset: 'FinGPT/fingpt-sentiment-train', human_field: 'input', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'law_zh', type: 'hf', dataset: 'ShengbinYue/DISC-Law-SFT', human_field: 'input', gpt_field: 'output', config: 'default', split: 'train', batch: 40 },
+  { name: 'code_instruct', type: 'hf', dataset: 'sahil2801/CodeAlpaca-20k', human_field: 'instruction', gpt_field: 'output', config: 'default', split: 'train', batch: 50 },
+  { name: 'science_qa', type: 'hf', dataset: 'derek-thomas/ScienceQA', human_field: 'question', gpt_field: 'solution', config: 'default', split: 'train', batch: 40 },
+  { name: 'arxiv_abstracts', type: 'rss', url: 'https://export.arxiv.org/api/query?search_query=cat:cs.AI&start={offset}&max_results={batch}&sortBy=submittedDate&sortOrder=descending', batch: 20, parser: 'arxiv' },
+  { name: 'hacker_news', type: 'rss', url: 'https://hn.algolia.com/api/v1/search?tags=story&hitsPerPage={batch}&page={page}', batch: 20, parser: 'hn' },
+];
+
+async function handleHarvest(env, corsHeaders) {
+  const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+  if (!env.DB) return new Response(JSON.stringify({ error: 'No D1' }), { status: 503, headers: jsonHeaders });
+  try {
+    await ensurePouchTables(env);
+    const today = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare('INSERT OR IGNORE INTO quota_log (date, requests, subrequests) VALUES (?, 0, 0)').bind(today).run();
+    const quota = await env.DB.prepare('SELECT requests, subrequests FROM quota_log WHERE date = ?').bind(today).first();
+    if (quota && quota.requests >= 90000) {
+      return new Response(JSON.stringify({ skipped: true, reason: 'daily_quota_near_limit', requests_today: quota.requests }), { headers: jsonHeaders });
+    }
+
+    let picked = null;
+    for (const src of HARVEST_SOURCES) {
+      const state = await env.DB.prepare('SELECT offset_val, exhausted FROM harvest_state WHERE source = ?').bind(src.name).first();
+      if (state && state.exhausted) continue;
+      picked = { ...src, offset: (state && state.offset_val) || 0 };
+      break;
+    }
+    if (!picked) {
+      await env.DB.prepare("UPDATE harvest_state SET exhausted = 0, offset_val = 0 WHERE exhausted = 1").run();
+      picked = { ...HARVEST_SOURCES[0], offset: 0 };
+    }
+
+    let harvested = 0;
+    let newOffset = picked.offset;
+    let exhausted = false;
+
+    if (picked.type === 'hf') {
+      const url = `https://datasets-server.huggingface.co/rows?dataset=${encodeURIComponent(picked.dataset)}&config=${picked.config}&split=${picked.split}&offset=${picked.offset}&length=${picked.batch}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'LOGOS-Harvest/1.0' } });
+      await env.DB.prepare('UPDATE quota_log SET subrequests = subrequests + 1 WHERE date = ?').bind(today).run();
+      if (res.ok) {
+        const data = await res.json();
+        const rows = (data.rows || []);
+        if (rows.length === 0) {
+          exhausted = true;
+        } else {
+          const batchInserts = [];
+          for (const item of rows) {
+            const row = item.row || item;
+            let human = '';
+            let gpt = '';
+            if (picked.gpt_field === '' && picked.human_field === 'plain_text') {
+              const text = row.plain_text || row.text || '';
+              const parts = text.split('<eoh>');
+              if (parts.length >= 2) { human = parts[0].replace(/<\|.*?\|>/g, '').trim(); gpt = parts[1].replace(/<\|.*?\|>/g, '').trim(); }
+            } else {
+              human = String(row[picked.human_field] || '').trim();
+              gpt = String(row[picked.gpt_field] || '').trim();
+              if (!gpt && row.output) gpt = String(row.output).trim();
+              if (!gpt && row.response) gpt = String(row.response).trim();
+            }
+            if (human.length < 4 || gpt.length < 4) continue;
+            if (human.length > 2000) human = human.slice(0, 2000);
+            if (gpt.length > 5000) gpt = gpt.slice(0, 5000);
+            batchInserts.push({ human, gpt });
+          }
+          const batchSize = 25;
+          for (let i = 0; i < batchInserts.length; i += batchSize) {
+            const batch = batchInserts.slice(i, i + batchSize);
+            const stmt = env.DB.prepare('INSERT INTO language_pairs (human, gpt) VALUES (?, ?)');
+            await env.DB.batch(batch.map(p => stmt.bind(p.human, p.gpt)));
+          }
+          harvested = batchInserts.length;
+          newOffset = picked.offset + rows.length;
+          if (rows.length < picked.batch) exhausted = true;
+        }
+      }
+    }
+
+    if (picked.type === 'rss') {
+      const page = Math.floor(picked.offset / picked.batch);
+      const url = picked.url.replace('{offset}', String(picked.offset)).replace('{batch}', String(picked.batch)).replace('{page}', String(page));
+      try {
+        const res = await fetch(url, { headers: { 'User-Agent': 'LOGOS-Harvest/1.0' } });
+        await env.DB.prepare('UPDATE quota_log SET subrequests = subrequests + 1 WHERE date = ?').bind(today).run();
+        if (res.ok) {
+          const batchInserts = [];
+          if (picked.parser === 'arxiv') {
+            const xml = await res.text();
+            const entries = xml.split('<entry>').slice(1);
+            for (const entry of entries) {
+              const title = (entry.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+              const summary = (entry.match(/<summary>([\s\S]*?)<\/summary>/) || [])[1] || '';
+              const human = title.replace(/\s+/g, ' ').trim();
+              const gpt = summary.replace(/\s+/g, ' ').trim();
+              if (human.length >= 4 && gpt.length >= 10) batchInserts.push({ human: human.slice(0, 2000), gpt: gpt.slice(0, 5000) });
+            }
+            if (entries.length === 0) exhausted = true;
+          } else if (picked.parser === 'hn') {
+            const data = await res.json();
+            const hits = data.hits || [];
+            for (const hit of hits) {
+              const human = (hit.title || '').trim();
+              const gpt = [hit.url || '', hit.story_text || ''].filter(Boolean).join(' ').trim();
+              if (human.length >= 4 && gpt.length >= 4) batchInserts.push({ human: human.slice(0, 2000), gpt: gpt.slice(0, 5000) });
+            }
+            if (hits.length === 0) exhausted = true;
+          }
+          const batchSize = 25;
+          for (let i = 0; i < batchInserts.length; i += batchSize) {
+            const batch = batchInserts.slice(i, i + batchSize);
+            const stmt = env.DB.prepare('INSERT INTO language_pairs (human, gpt) VALUES (?, ?)');
+            await env.DB.batch(batch.map(p => stmt.bind(p.human, p.gpt)));
+          }
+          harvested = batchInserts.length;
+          newOffset = picked.offset + picked.batch;
+        }
+      } catch (_e) {}
+    }
+
+    await env.DB.prepare('INSERT OR REPLACE INTO harvest_state (source, offset_val, total_harvested, last_run, exhausted) VALUES (?, ?, COALESCE((SELECT total_harvested FROM harvest_state WHERE source = ?), 0) + ?, ?, ?)')
+      .bind(picked.name, newOffset, picked.name, harvested, Date.now(), exhausted ? 1 : 0).run();
+    await env.DB.prepare('UPDATE quota_log SET requests = requests + 1 WHERE date = ?').bind(today).run();
+
+    const totalRow = await env.DB.prepare('SELECT SUM(total_harvested) as t FROM harvest_state').first();
+    const pairsCount = await env.DB.prepare('SELECT COUNT(*) as c FROM language_pairs').first();
+
+    return new Response(JSON.stringify({
+      source: picked.name,
+      harvested,
+      offset: newOffset,
+      exhausted,
+      total_all_sources: (totalRow && totalRow.t) || 0,
+      language_pairs_in_d1: (pairsCount && pairsCount.c) || 0
+    }), { headers: jsonHeaders });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
+  }
+}
+
+async function handleQuota(env, corsHeaders) {
+  const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+  if (!env.DB) return new Response(JSON.stringify({ error: 'No D1' }), { status: 503, headers: jsonHeaders });
+  try {
+    await ensurePouchTables(env);
+    const today = new Date().toISOString().slice(0, 10);
+    await env.DB.prepare('INSERT OR IGNORE INTO quota_log (date, requests, subrequests) VALUES (?, 0, 0)').bind(today).run();
+    const row = await env.DB.prepare('SELECT * FROM quota_log WHERE date = ?').bind(today).first();
+    const history = await env.DB.prepare('SELECT * FROM quota_log ORDER BY date DESC LIMIT 7').all();
+    const harvestRows = await env.DB.prepare('SELECT source, offset_val, total_harvested, last_run, exhausted FROM harvest_state ORDER BY last_run DESC').all();
+    return new Response(JSON.stringify({
+      today: row || { date: today, requests: 0, subrequests: 0 },
+      free_tier_limit: 100000,
+      remaining: 100000 - ((row && row.requests) || 0),
+      history: (history && history.results) || [],
+      harvest_progress: (harvestRows && harvestRows.results) || []
+    }), { headers: jsonHeaders });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
   }
 }
 
