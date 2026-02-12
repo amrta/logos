@@ -16,6 +16,11 @@ routes = [
 ]
 account_id = ""
 
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "logos"
+database_id = "fba2833f-b0f6-424a-89ad-4367431b2897"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "logos"

@@ -26,6 +26,18 @@ mod pouch_catalog;
 mod pouch_code_analyzer;
 mod pouch_knowledge_retriever;
 mod pouch_pilot;
+mod pouch_analogy;
+mod pouch_induction;
+mod pouch_deduction;
+mod pouch_code_template;
+mod pouch_compose;
+mod pouch_fragment;
+mod pouch_generator;
+mod pouch_explorer;
+mod pouch_image;
+mod pouch_audio;
+mod pouch_realtime;
+mod pouch_sanitize;
 mod test_terminal;
 
 use orchestrator::Orchestrator;
@@ -208,6 +220,7 @@ async fn main() {
         .route("/api/batch_teach", post(batch_teach))
         .route("/api/seed_routes", post(seed_routes))
         .route("/api/dashboard", get(dashboard))
+        .route("/api/learning_state", get(learning_state))
         .with_state(app);
 
     let addr = "127.0.0.1:3000";
@@ -548,5 +561,21 @@ async fn dashboard(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
             "cloud_pushed": ls.cloud_pushed,
             "cloud_cursor": ls.cloud_sync_cursor
         }
+    }))
+}
+
+async fn learning_state(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let orch = app.orch.lock().await;
+    let ls = orch.learning_snapshot();
+    let (pattern_count, pouch_count, avg_maturity) = orch.learning_metrics_extra();
+    Json(serde_json::json!({
+        "cycle_count": ls.cycle_count,
+        "cross_fed": ls.cross_fed,
+        "cross_absorbed": ls.cross_absorbed,
+        "saturation": ls.saturation,
+        "pattern_count": pattern_count,
+        "pouch_count": pouch_count,
+        "new_pouches": 0,
+        "avg_maturity": avg_maturity
     }))
 }

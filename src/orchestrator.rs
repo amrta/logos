@@ -43,6 +43,7 @@ const EVOLUTION_CHAIN_MAX: usize = 1000;
 const SATURATION_THRESHOLD: f64 = 0.65;
 const CROSS_LEARN_BATCH: usize = 8;
 const MATURITY_HUNGRY: f64 = 0.3;
+const A2_NEXT_INTENT_MAX: usize = 500;
 
 fn hash_str(s: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -186,6 +187,7 @@ pub struct Orchestrator {
     evolution: Vec<EvolutionRecord>,
     evolution_chain: Vec<EvolutionEntry>,
     promoted_cache: HashMap<u64, String>,
+    chain_result_cache: std::collections::VecDeque<(String, String)>,
     registry: CapabilityRegistry,
     pub learning: LearningState,
 }
@@ -208,6 +210,7 @@ impl Orchestrator {
             evolution: Vec::new(),
             evolution_chain: Vec::new(),
             promoted_cache: HashMap::new(),
+            chain_result_cache: std::collections::VecDeque::new(),
             registry: CapabilityRegistry::new(),
             learning: LearningState::default(),
         };
@@ -279,8 +282,19 @@ impl Orchestrator {
         }
 
         let trimmed = input.trim();
-        if trimmed.starts_with("语言评估") || trimmed.to_lowercase().starts_with("eval language") {
-            let path = trimmed
+        let sanitized_store;
+        let input = if let Some((rejected, out)) = self.sanitize_input(trimmed).await {
+            if rejected {
+                self.unguard();
+                return Ok((out, "sanitize".into()));
+            }
+            sanitized_store = out;
+            &sanitized_store
+        } else {
+            trimmed
+        };
+        if input.starts_with("语言评估") || input.to_lowercase().starts_with("eval language") {
+            let path = input
                 .replace("语言评估", "")
                 .replace("eval language", "")
                 .replace("Eval Language", "")
@@ -366,6 +380,14 @@ impl Orchestrator {
                 && !self.language.is_fallback_response(&lang_check)
             {
                 self.log_event("LANG_PRIORITY hit".into());
+                if let Some(out) = self.execute_chain_spec(input, &lang_check).await {
+                    self.unguard();
+                    return Ok((out, "chain".into()));
+                }
+                if let Some(expanded) = self.expand_template(input, &lang_check).await {
+                    self.unguard();
+                    return Ok((expanded, "template".into()));
+                }
                 self.unguard();
                 return Ok((lang_check, "language".into()));
             }
@@ -469,6 +491,12 @@ impl Orchestrator {
                 }
                 let lang_final = self.language.process(input).await;
                 self.log_event("LANG process".into());
+                if let Some(out) = self.execute_chain_spec(input, &lang_final).await {
+                    return self.unguard_then(Ok((out, "chain".into())));
+                }
+                if let Some(expanded) = self.expand_template(input, &lang_final).await {
+                    return self.unguard_then(Ok((expanded, "template".into())));
+                }
                 if !self.language.is_fallback_response(&lang_final) {
                     return self.unguard_then(Ok((lang_final, "language".into())));
                 }
@@ -498,6 +526,82 @@ impl Orchestrator {
             PouchRole::E1 => 1,
             PouchRole::E2 => 2,
         }
+    }
+
+    async fn sanitize_input(&mut self, input: &str) -> Option<(bool, String)> {
+        let name = self.pouches.keys().find(|n| n.contains("sanitize"))?.clone();
+        let pouch = self.pouches.get_mut(&name)?;
+        let proposal = create_proposal(input);
+        let validated = pouch.validator().validate(&proposal).ok()?;
+        let out = pouch.process_proposal(&validated).await.ok()?;
+        let rejected = pouch.is_fallback_output(&out.data);
+        Some((rejected, out.data))
+    }
+
+    async fn expand_template(&mut self, input: &str, response: &str) -> Option<String> {
+        if !response.contains("{{") || !response.contains("}}") {
+            return None;
+        }
+        let mut out = response.to_string();
+        for _ in 0..5 {
+            let start = match out.find("{{") {
+                Some(s) => s,
+                None => break,
+            };
+            let end = match out[start..].find("}}") {
+                Some(e) => start + e + 2,
+                None => break,
+            };
+            let inner = out[start..end].strip_prefix("{{").and_then(|s| s.strip_suffix("}}")).unwrap_or("").trim();
+            if let Some((pouch, query)) = inner.split_once(':') {
+                let pouch = pouch.trim();
+                let query = query.trim();
+                let q = if query == "input" { input } else { query };
+                if self.pouches.contains_key(pouch) {
+                    if let Ok(rep) = self.call_pouch(pouch, q).await {
+                        out.replace_range(start..end, &rep);
+                        continue;
+                    }
+                }
+            }
+            out.replace_range(start..end, "");
+        }
+        if out == response {
+            return None;
+        }
+        Some(out)
+    }
+
+    async fn execute_chain_spec(&mut self, input: &str, response: &str) -> Option<String> {
+        let spec = response.strip_prefix("chain:")?.trim();
+        if spec.is_empty() {
+            return None;
+        }
+        let pouches: Vec<&str> = spec.split("->").map(str::trim).filter(|s| !s.is_empty()).collect();
+        let max_depth = self.config.chain.chain_spec_max_depth.clamp(2, 12);
+        if pouches.is_empty() || pouches.len() > max_depth {
+            return None;
+        }
+        let cache_key = format!("{}|{}", hash_str(input), spec);
+        if let Some(cached) = self.chain_result_cache.iter().find(|(k, _)| k == &cache_key).map(|(_, v)| v.clone()) {
+            self.log_event("CACHE chain hit".into());
+            return Some(cached);
+        }
+        let mut carry = input.to_string();
+        for name in pouches {
+            if !self.pouches.contains_key(name) {
+                return None;
+            }
+            match self.call_pouch(name, &carry).await {
+                Ok(out) => carry = out,
+                Err(_) => return None,
+            }
+        }
+        if self.chain_result_cache.len() >= 100 {
+            self.chain_result_cache.pop_front();
+        }
+        self.chain_result_cache.push_back((cache_key, carry.clone()));
+        Some(carry)
     }
 
     async fn try_fallback_chain(&mut self, input: &str) -> Option<(String, String)> {
@@ -1647,6 +1751,7 @@ impl Orchestrator {
             "atom_count": self.registry.count(),
             "evolution_total": evo_total,
             "evolution_promoted": evo_promoted,
+            "evolution_chain_len": self.evolution_chain.len(),
             "total_memory": self.total_memory_count(),
             "has_context": self.language.context_len() > 0,
         }).to_string()
@@ -2032,6 +2137,15 @@ impl Orchestrator {
         &self.learning
     }
 
+    pub fn learning_metrics_extra(&self) -> (usize, usize, f64) {
+        let info = self.pouches_info();
+        let pattern_count = info.iter().find(|(n, _, _, _)| n == "language").map(|(_, _, m, _)| *m).unwrap_or(0);
+        let pouch_count = info.len();
+        let mat_sum: f64 = info.iter().map(|(n, _, _, _)| self.pouch_maturity(n)).sum();
+        let avg_maturity = if pouch_count > 0 { mat_sum / pouch_count as f64 } else { 0.0 };
+        (pattern_count, pouch_count, avg_maturity)
+    }
+
     const CLOUD_WORKER_BASE: &'static str = "https://logos-gateway.amrta.workers.dev";
 
     pub async fn sync_with_cloud(&mut self) {
@@ -2291,14 +2405,40 @@ impl Orchestrator {
             }
 
             let mut teacher_outputs: Vec<(String, String, String)> = Vec::new();
-            for teacher in &teachers {
-                for intent in &intents {
-                    let result = self.call_pouch(teacher, intent).await;
-                    if let Ok(ref output) = result {
-                        if output.len() > 10 && !self.language.is_fallback_response(output) {
-                            teacher_outputs.push((teacher.clone(), intent.clone(), output.clone()));
+            let a2_hops = self.config.chain.a2_chain_hops.clamp(2, 12);
+            let mut chain_intents: Vec<String> = intents.clone();
+            for hop in 0..a2_hops {
+                let mut hop_outputs: Vec<(String, String, String)> = Vec::new();
+                for teacher in &teachers {
+                    for intent in &chain_intents {
+                        let result = self.call_pouch(teacher, intent).await;
+                        if let Ok(ref output) = result {
+                            if output.len() > 10 && !self.language.is_fallback_response(output) {
+                                hop_outputs.push((teacher.clone(), intent.clone(), output.clone()));
+                            }
                         }
                     }
+                }
+                for o in &hop_outputs {
+                    teacher_outputs.push(o.clone());
+                }
+                if hop + 1 >= a2_hops {
+                    break;
+                }
+                chain_intents = hop_outputs
+                    .iter()
+                    .map(|(_, _, o)| {
+                        let s = o.trim();
+                        if s.len() > A2_NEXT_INTENT_MAX {
+                            s.chars().take(A2_NEXT_INTENT_MAX).collect::<String>()
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                    .filter(|s| s.len() > 10 && !self.language.is_fallback_response(s))
+                    .collect::<Vec<_>>();
+                if chain_intents.is_empty() {
+                    break;
                 }
             }
 

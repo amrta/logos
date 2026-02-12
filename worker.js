@@ -709,6 +709,7 @@ async function ensurePouchTables(env) {
     await env.DB.exec('CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, input TEXT, signal INTEGER, correction TEXT, ts TEXT)');
     await env.DB.exec('CREATE TABLE IF NOT EXISTS harvest_state (source TEXT PRIMARY KEY, offset_val INTEGER DEFAULT 0, total_harvested INTEGER DEFAULT 0, last_run INTEGER, exhausted INTEGER DEFAULT 0)');
     await env.DB.exec('CREATE TABLE IF NOT EXISTS quota_log (date TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, subrequests INTEGER DEFAULT 0)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS learning_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER, cycle INTEGER, cross_fed INTEGER, cross_absorbed INTEGER, saturation REAL, pattern_count INTEGER, pouch_count INTEGER, new_pouches INTEGER DEFAULT 0, avg_maturity REAL)');
     const count = await env.DB.prepare('SELECT COUNT(*) as c FROM pouch_specs').first();
     if (count && count.c === 0) {
       const base = 'https://logos-gateway.amrta.workers.dev';
@@ -858,6 +859,10 @@ export default {
 
       if (path === '/quota' && request.method === 'GET') {
         return await handleQuota(env, corsHeaders);
+      }
+
+      if ((path === '/api/metrics' || path === '/metrics') && request.method === 'GET') {
+        return await handleMetricsExport(env, corsHeaders, url);
       }
 
       if (path === '/feedback' && request.method === 'POST') {
@@ -1709,10 +1714,58 @@ async function handleAutoTrainStep(env, corsHeaders) {
           body: JSON.stringify({ message: '自主学习' })
         });
         if (lr.ok) learnResult = await lr.json();
+        const stateRes = await fetch(backend.replace(/\/$/, '') + '/api/learning_state');
+        if (stateRes.ok) {
+          const state = await stateRes.json();
+          const cycle = state.cycle_count != null ? Number(state.cycle_count) : 0;
+          if (cycle > 0 && cycle % 10 === 0 && env.DB) {
+            const ts = Math.floor(Date.now() / 1000);
+            await env.DB.prepare(
+              'INSERT INTO learning_metrics (timestamp, cycle, cross_fed, cross_absorbed, saturation, pattern_count, pouch_count, new_pouches, avg_maturity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(
+              ts,
+              cycle,
+              Number(state.cross_fed || 0),
+              Number(state.cross_absorbed || 0),
+              Number(state.saturation || 0),
+              Number(state.pattern_count || 0),
+              Number(state.pouch_count || 0),
+              Number(state.new_pouches || 0),
+              Number(state.avg_maturity || 0)
+            ).run();
+          }
+        }
       } catch (_) {}
     }
 
     return new Response(JSON.stringify({ applied, last_run: now, learn: learnResult }), { headers: jsonHeaders });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
+  }
+}
+
+async function handleMetricsExport(env, corsHeaders, url) {
+  const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+  if (!env.DB) return new Response(JSON.stringify({ error: 'No D1' }), { status: 503, headers: jsonHeaders });
+  try {
+    await ensurePouchTables(env);
+    const rows = await env.DB.prepare('SELECT timestamp, cycle, cross_fed, cross_absorbed, saturation, pattern_count, pouch_count, new_pouches, avg_maturity FROM learning_metrics ORDER BY timestamp').all();
+    const metrics = (rows.results || []).map(r => ({
+      timestamp: r.timestamp,
+      cycle: r.cycle,
+      cross_fed: r.cross_fed,
+      cross_absorbed: r.cross_absorbed,
+      saturation: r.saturation,
+      pattern_count: r.pattern_count,
+      pouch_count: r.pouch_count,
+      new_pouches: r.new_pouches,
+      avg_maturity: r.avg_maturity
+    }));
+    const format = (url && url.searchParams && url.searchParams.get('format')) || 'json';
+    if (format === 'json') {
+      return new Response(JSON.stringify(metrics), { headers: jsonHeaders });
+    }
+    return new Response(JSON.stringify(metrics), { headers: jsonHeaders });
   } catch (e) {
     return new Response(JSON.stringify({ error: (e && e.message) || String(e) }), { status: 500, headers: jsonHeaders });
   }
